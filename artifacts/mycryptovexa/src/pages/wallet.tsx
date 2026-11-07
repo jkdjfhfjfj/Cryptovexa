@@ -313,7 +313,7 @@ export default function WalletPage() {
                 </div>
               ))}
             </div>
-          ) : <EmptyState icon={WalletIcon} title="No transactions yet" body="Credits, rental charges and refunds appear here, each tied to a ledger entry." />}
+          ) : <EmptyState icon={WalletIcon} title="No transactions yet" body="Deposits, rental profit payouts, capital releases and adjustments appear here, each tied to a ledger entry." />}
         </TabsContent>
         <TabsContent value="deposits" className="space-y-3">
           <div className="flex justify-end"><a href={exportUrl('deposits')} className="inline-flex items-center gap-1.5 text-sm rounded-full border px-4 py-2 hover:bg-muted"><Download className="w-4 h-4" />CSV</a></div>

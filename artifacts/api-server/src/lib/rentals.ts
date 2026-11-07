@@ -11,29 +11,93 @@ export async function startRental(user: any,b: any,c: any) {
   assert(modeMinutes[b.billing_mode],"Invalid billing mode");
   assert(d*modeMinutes[b.billing_mode]!>=a.min_duration && d*modeMinutes[b.billing_mode]!<=a.max_duration,"Duration is outside this asset's limits");
   assert(units<=a.available_units,"Not enough units available");
-  let rate=a[`${b.billing_mode}_rate`];
-  assert(rate&&!/^0(?:\.0*)?$/.test(rate),"This billing mode is disabled");
-  const discount=(a.data.discount_rules??[]).filter((rule:any)=>Number(rule.min_units??1)<=units&&Number(rule.min_duration??1)<=d)
-    .sort((a:any,b:any)=>Number(b.percent??0)-Number(a.percent??0))[0];
-  if(discount){
-    const percent=String(discount.percent??"0");assert(Number(percent)>=0&&Number(percent)<100,"Invalid configured discount");
-    const [{adjusted}]=await q("SELECT round($1::numeric*(1-$2::numeric/100),18)::text AS adjusted",[rate,percent],c);rate=adjusted;
-  }
-  const cfg=await config(false,c);
-  const id=uid(), minutes=d*modeMinutes[b.billing_mode]!;
-  const [{cost,baseCost}]=await q('SELECT ($1::numeric*$2::integer*$3::integer)::text AS "baseCost",GREATEST($1::numeric*$2::integer*$3::integer,$4::numeric)::text AS cost',[rate,b.billing_mode==="minute"?1:d,units,cfg.billing.minimum_charge??"0"],c);
-  await move(c,user.id,a.currency,`-${cost}`,"rental_charge",id,`rent-start:${id}`);
+  const rate=String(a[`${b.billing_mode}_rate`]??"0"),capitalPerUnit=String(a.data?.capital_required??"0");
+  const [{configured}]=await q("SELECT $1::numeric>0 AND $2::numeric>0 AS configured",[capitalPerUnit,rate],c);
+  assert(configured,"This rental's capital and profit schedule must be configured by an administrator");
+  const minutes=d*modeMinutes[b.billing_mode]!,durationMs=minutes*60000;
+  const [{principal,profit}]=await q("SELECT ($1::numeric*$2::integer)::text AS principal,($3::numeric*$4::integer*$2::integer)::text AS profit",
+    [capitalPerUnit,units,rate,d],c);
+  const id=uid();
+  await move(c,user.id,a.currency,"0","rental_principal_lock",id,`rental-principal-lock:${id}`,principal);
   const [r]=await q(`INSERT INTO rentals(id,user_id,asset_id,billing_mode,rate_snapshot,end_at,billed_until,total_cost,auto_renew,units,data)
-    VALUES($1,$2,$3,$4,$5,now()+$6*interval '1 minute',now()+$7*interval '1 minute',$8,$9,$10,$11::jsonb) RETURNING *`,
-    [id,user.id,a.id,b.billing_mode,rate,minutes,b.billing_mode==="minute"?1:minutes,cost,Boolean(b.auto_renew),units,JSON.stringify({currency:a.currency,asset_title:a.title,duration:d,billing:cfg.billing,base_cost:baseCost,rental_kind:"virtual",virtual_terms_accepted_at:b.virtual_terms_accepted===true?new Date().toISOString():null})],c);
+    VALUES($1,$2,$3,$4,$5,now()+$6*interval '1 minute',now()+$6*interval '1 minute',0,$7,$8,$9::jsonb) RETURNING *`,
+    [id,user.id,a.id,b.billing_mode,rate,minutes,Boolean(b.auto_renew),units,JSON.stringify({
+      currency:a.currency,asset_title:a.title,duration:d,duration_ms:String(durationMs),rental_model_version:2,
+      principal_amount:principal,capital_required_per_unit:capitalPerUnit,profit_per_cycle:profit,expected_profit:profit,profit_paid:"0",
+      rental_kind:"virtual",rental_terms_accepted_at:new Date().toISOString(),
+    })],c);
   await q("UPDATE assets SET available_units=available_units-$1 WHERE id=$2",[units,a.id],c);
-  await event(user.id,"Virtual rental started",`${a.title} is now reserved inside the app. This fee does not provide access to real property or computing hardware, or an investment return.`,"rental_started",c);
+  await event(user.id,"Rental started",`${a.title} is reserved. Your principal is locked for the selected term, and the configured profit schedule is snapshotted for settlement.`,"rental_started",c);
   return r;
+}
+async function addProfit(c:any,r:any,value:string,key:string){
+  if(!/^0(?:\.0*)?$/.test(value))await move(c,r.user_id,r.data.currency,value,"rental_profit",r.id,key);
+}
+async function settlementProfit(c:any,a:string,b:string){
+  const [{total}]=await q("SELECT ($1::numeric+$2::numeric)::text AS total",[a,b],c);return String(total);
+}
+/** Settles one or more completed terms, or prorates the current term on an early stop. */
+async function settleProfitRental(c:any,r:any,now:Date,stopping:boolean){
+  const durationMs=Number(r.data.duration_ms),profitPerTerm=String(r.data.profit_per_cycle??"0"),principal=String(r.data.principal_amount??"0");
+  assert(Number.isSafeInteger(durationMs)&&durationMs>0,"Rental term snapshot is invalid",500);
+  const nowMs=now.getTime();let endMs=new Date(r.end_at).getTime();
+  let profitPaid="0",cycleStartMs=r.data.cycle_started_at?new Date(r.data.cycle_started_at).getTime():new Date(r.start_at).getTime();
+  const cyclesDue=r.auto_renew&&nowMs>=endMs?BigInt(Math.floor((nowMs-endMs)/durationMs)+1):0n;
+  if(cyclesDue>0n){
+    const completedProfit=String((await q("SELECT ($1::numeric*$2::numeric)::text AS total",[profitPerTerm,cyclesDue.toString()],c))[0].total);
+    const newEndMs=endMs+Number(cyclesDue)*durationMs,newCycleStartMs=newEndMs-durationMs;
+    await addProfit(c,r,completedProfit,`rental-profit-cycle:${r.id}:${new Date(newEndMs).toISOString()}`);
+    profitPaid=await settlementProfit(c,profitPaid,completedProfit);
+    endMs=newEndMs;
+    if(!stopping){
+      const totalProfit=String((await q("SELECT ($1::numeric+$2::numeric)::text AS total",[r.total_cost??"0",completedProfit],c))[0].total);
+      await q(`UPDATE rentals SET end_at=$1,billed_until=$1,total_cost=$2,data=data||$3::jsonb WHERE id=$4`,
+        [new Date(newEndMs),totalProfit,JSON.stringify({cycle_started_at:new Date(newCycleStartMs).toISOString(),profit_paid:totalProfit}),r.id],c);
+      await event(r.user_id,"Rental renewed",`${r.data.asset_title} renewed for another term. Completed-term profit was credited; principal remains locked.`,"rental_auto_renewed",c);
+      return;
+    }
+    cycleStartMs=newCycleStartMs;
+  }
+  if(!stopping&&nowMs<endMs){
+    const reminder=new Date(endMs).toISOString();
+    if(endMs-nowMs<=10*60000&&r.data.reminded_end!==reminder){
+      await q("UPDATE rentals SET data=data||$1::jsonb WHERE id=$2",[JSON.stringify({reminded_end:reminder}),r.id],c);
+      await event(r.user_id,"Rental ending soon","Your rental term is nearing maturity. Review auto-renew or let the principal release at maturity.","rental_ending_soon",c);
+    }
+    return;
+  }
+  const matured=!r.auto_renew&&nowMs>=endMs;
+  if(matured){
+    const totalProfit=await settlementProfit(c,profitPaid,profitPerTerm);
+    await addProfit(c,r,profitPerTerm,`rental-profit-maturity:${r.id}:${new Date(endMs).toISOString()}`);
+    await move(c,r.user_id,r.data.currency,"0","rental_principal_release",r.id,`rental-principal-release:${r.id}`,`-${principal}`);
+    const lifetimeProfit=String((await q("SELECT ($1::numeric+$2::numeric)::text AS total",[r.total_cost??"0",totalProfit],c))[0].total);
+    await q("UPDATE rentals SET status='completed',auto_renew=false,total_cost=$1,data=data||$2::jsonb WHERE id=$3",
+      [lifetimeProfit,JSON.stringify({profit_paid:lifetimeProfit,settled_at:now.toISOString(),settlement:"maturity"}),r.id],c);
+    await q("UPDATE assets SET available_units=LEAST(total_units,available_units+$1) WHERE id=$2",[r.units,r.asset_id],c);
+    await event(r.user_id,"Rental matured",`${r.data.asset_title} matured. Principal was released and the configured profit was credited.`,"rental_completed",c);
+    return;
+  }
+  if(!stopping)return;
+  const cutoff=Math.min(nowMs,endMs),elapsed=Math.max(0,Math.min(durationMs,cutoff-cycleStartMs));
+  const partialProfit=String((await q("SELECT round($1::numeric*$2::numeric/$3::numeric,18)::text AS total",[profitPerTerm,String(elapsed),String(durationMs)],c))[0].total);
+  await addProfit(c,r,partialProfit,`rental-profit-stop:${r.id}`);
+  profitPaid=await settlementProfit(c,profitPaid,partialProfit);
+  await move(c,r.user_id,r.data.currency,"0","rental_principal_release",r.id,`rental-principal-release:${r.id}`,`-${principal}`);
+  const lifetimeProfit=String((await q("SELECT ($1::numeric+$2::numeric)::text AS total",[r.total_cost??"0",profitPaid],c))[0].total);
+  const settledAt=matured?"maturity":"early_stop";
+  const status=matured?"completed":"cancelled";
+  await q("UPDATE rentals SET status=$1,end_at=CASE WHEN $1='cancelled' THEN $2 ELSE end_at END,auto_renew=false,total_cost=$3,data=data||$4::jsonb WHERE id=$5",
+    [status,now,lifetimeProfit,JSON.stringify({profit_paid:lifetimeProfit,settled_at:now.toISOString(),settlement:settledAt}),r.id],c);
+  await q("UPDATE assets SET available_units=LEAST(total_units,available_units+$1) WHERE id=$2",[r.units,r.asset_id],c);
+  await event(r.user_id,status==="completed"?"Rental matured":"Rental stopped",
+    status==="completed"?`${r.data.asset_title} matured. Principal was released and the configured profit was credited.`:`${r.data.asset_title} stopped early. Principal was released with prorated profit.`,"rental_stopped",c);
 }
 export async function stopRental(user: any,b: any,c: any,admin=false) {
   const [r]=await q(`SELECT r.*,COALESCE(r.data->>'currency',a.currency) AS currency FROM rentals r JOIN assets a ON a.id=r.asset_id WHERE r.id=$1 ${admin?"":"AND r.user_id=$2"} FOR UPDATE OF r,a`,admin?[str(b.id)]:[str(b.id),user.id],c);
   assert(r,"Rental not found",404);
   if(!["active","paused"].includes(r.status)) return r;
+  if(r.data?.rental_model_version===2){await settleProfitRental(c,r,new Date(),true);return;}
   if(r.status==="active"&&r.billing_mode==="minute"){
     await billRental(c,r.id,new Date(),true);
   }
@@ -61,6 +125,15 @@ export async function extendRental(user:any,b:any,c:any,admin=false) {
   const [a]=await q("SELECT * FROM assets WHERE id=$1 FOR UPDATE",[r.asset_id],c);
   assert(new Date(r.end_at).getTime()>Date.now(),"This rental has expired");
   assert(new Date(r.end_at).getTime()-new Date(r.start_at).getTime()+minutes*60000<=a.max_duration*60000,"Extension exceeds this asset's maximum duration");
+  if(r.data?.rental_model_version===2){
+    const [{additional,expected}]=await q("SELECT ($1::numeric*$2::integer*$3::integer)::text AS additional,($4::numeric+$1::numeric*$2::integer*$3::integer)::text AS expected",
+      [r.rate_snapshot,d,r.units,r.data.expected_profit??r.data.profit_per_cycle],c);
+    const durationMs=Number(r.data.duration_ms)+minutes*60000;
+    await q("UPDATE rentals SET end_at=end_at+$1*interval '1 minute',billed_until=billed_until+$1*interval '1 minute',data=data||$2::jsonb WHERE id=$3",
+      [minutes,JSON.stringify({duration:d+Number(r.data.duration??1),duration_ms:String(durationMs),profit_per_cycle:expected,expected_profit:expected}),r.id],c);
+    await event(r.user_id,"Rental extended",`The term was extended. The estimated profit is now ${expected} ${r.data.currency}.`,"rental_extended",c);
+    return;
+  }
   if(r.billing_mode!=="minute"){
     const [{cost,baseCost}]=await q(`SELECT ($1::numeric*$2::integer*$3::integer+$4::numeric)::text AS "baseCost",
       GREATEST(0,GREATEST($1::numeric*$2::integer*$3::integer+$4::numeric,$5::numeric)-$6::numeric)::text AS cost`,
@@ -76,6 +149,10 @@ export async function extendRental(user:any,b:any,c:any,admin=false) {
 export async function billRental(c:any,id:string,now=new Date(),stopping=false) {
   const [r]=await q("SELECT * FROM rentals WHERE id=$1 FOR UPDATE SKIP LOCKED",[id],c);
   if(!r||!["active","paused"].includes(r.status))return;
+  if(r.data?.rental_model_version===2){
+    await q("SELECT id FROM assets WHERE id=$1 FOR UPDATE",[r.asset_id],c);
+    await settleProfitRental(c,r,now,stopping);return;
+  }
   await q("SELECT id FROM assets WHERE id=$1 FOR UPDATE",[r.asset_id],c);
   const cfg=await config(false,c),billing=r.data.billing??cfg.billing;
   const clock=now.getTime(),end=new Date(r.end_at).getTime(),until=new Date(r.billed_until).getTime();

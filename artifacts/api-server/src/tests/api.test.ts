@@ -11,7 +11,7 @@ strict.notEqual(process.env.NODE_ENV,"production","API fixtures must never run a
 
 // Full HTTP/SQL boundary checks, without external transfers or global settings changes.
 const people=new Map<string,{id:string;email:string;cookie:string;csrf:string}>();
-let server:Server,origin="",kycId="",fileId="",assetId="",rentalId="";
+let server:Server,origin="",kycId="",fileId="",assetId="",rentalId="",profitAssetId="";
 test.before(async()=>{
   await transaction(async c=>{
     for(const role of ["user","superadmin","finance","support"]){
@@ -27,7 +27,8 @@ test.before(async()=>{
     await q("INSERT INTO platform_records(id,kind,user_id,data) VALUES($1,'kyc',$2,$3::jsonb)",[kycId,user.id,JSON.stringify({status:"submitted",required_items:["selfie"],block_withdrawals:true,documents:[{id:"selfie",type:"selfie",objectPath,status:"submitted"}]})],c);
     await q("UPDATE users SET kyc_status='submitted',withdrawals_blocked=true WHERE id=$1",[user.id],c);
     assetId=uid();rentalId=uid();
-    await q("INSERT INTO assets(id,type,title,description,location,category,total_units,available_units) VALUES($1,'machine','Isolated API fixture','Test only','Test only','Test only',1,0)",[assetId],c);
+    await q("INSERT INTO assets(id,type,title,description,location,category,total_units,available_units,data) VALUES($1,'machine','Isolated API fixture','Test only','Test only','Test only',1,0,$2::jsonb)",
+      [assetId,JSON.stringify({capital_required:"10",profit_rate_basis:"hour",profit_rate_value:"1"})],c);
     await q("INSERT INTO rentals(id,user_id,asset_id,billing_mode,rate_snapshot,end_at,billed_until,data) VALUES($1,$2,$3,'hour','0',now()+interval '1 hour',now()+interval '1 hour',$4::jsonb)",[rentalId,user.id,assetId,JSON.stringify({currency:"USDT",asset_title:"Isolated API fixture",billing:{proration:false}})],c);
   });
   await new Promise<void>((resolve,reject)=>{server=app.listen(0,"127.0.0.1",()=>resolve());server.once("error",reject);});
@@ -70,6 +71,19 @@ test("Support and finance cannot cross their action permissions",async()=>{
   strict.equal((await request("finance","/admin/actions/settings-save",{section:"general",values:{site_name:"Never applied"}})).status,403);
   strict.equal((await request("finance","/admin/actions/kyc-review",{id:kycId,status:"approved"})).status,403);
 });
+test("Admin asset editor converts one profit rate into minute, hour, and day rates",async()=>{
+  profitAssetId=uid();
+  const body={id:profitAssetId,type:"machine",title:"Isolated rate conversion",description:"Test only",location:"Test only",category:"Test only",status:"active",
+    total_units:1,available_units:1,currency:"USDT",capital_required:"100",profit_rate_basis:"hour",profit_rate_value:"12",
+    rates:{minute:"0.2",hour:"12",day:"288"},min_duration:1,max_duration:43200,images:[],specs:{},discount_rules:[],scheduled_changes:[]};
+  strict.equal((await request("superadmin","/admin/actions/asset-save",body)).status,200);
+  let [saved]=await q("SELECT minute_rate,hour_rate,day_rate,data FROM assets WHERE id=$1",[profitAssetId]);
+  strict.equal(saved.minute_rate,"0.200000000000000000");strict.equal(saved.hour_rate,"12.000000000000000000");strict.equal(saved.day_rate,"288.000000000000000000");
+  strict.equal(saved.data.capital_required,"100");
+  strict.equal((await request("superadmin","/admin/actions/asset-save",{...body,profit_rate_basis:"day",profit_rate_value:"144",rates:{minute:"0.1",hour:"6",day:"144"}})).status,200);
+  [saved]=await q("SELECT minute_rate,hour_rate,day_rate FROM assets WHERE id=$1",[profitAssetId]);
+  strict.equal(saved.minute_rate,"0.100000000000000000");strict.equal(saved.hour_rate,"6.000000000000000000");strict.equal(saved.day_rate,"144.000000000000000000");
+});
 test("CSRF denial happens before mutation",async()=>{
   strict.equal((await request("superadmin","/admin/actions/user-update",{id:people.get("user")!.id,status:"suspended"},false)).status,403);
   const [u]=await q("SELECT status FROM users WHERE id=$1",[people.get("user")!.id]);strict.equal(u.status,"active");
@@ -100,7 +114,7 @@ test("Staff force-stop requires a reason and records it in the audit trail",asyn
   const [r]=await q("SELECT status FROM rentals WHERE id=$1",[rentalId]);strict.equal(r.status,"cancelled");
   const [log]=await q("SELECT meta FROM audit_logs WHERE actor_id=$1 AND action='rental-stop' AND entity_id=$2",[people.get("superadmin")!.id,rentalId]);strict.equal(log.meta.reason,reason);
 });
-test("Concurrent HTTP rental request replay returns the same real response and debit",async()=>{
+test("Concurrent HTTP rental request replay returns the same response and capital lock",async()=>{
   const user=people.get("user")!,requestId=uid();
   await transaction(async c=>{
     await move(c,user.id,"USDT","20","test_funding","api-fixture",`api-fund:${user.id}`);
@@ -108,17 +122,19 @@ test("Concurrent HTTP rental request replay returns the same real response and d
   });
   const denied=await request("user","/v1/actions/rent",{asset_id:assetId,billing_mode:"hour",duration:1,units:1});
   strict.equal(denied.status,400);
-  const body={asset_id:assetId,billing_mode:"hour",duration:1,units:1,request_id:requestId,virtual_terms_accepted:true};
+  const body={asset_id:assetId,billing_mode:"hour",duration:1,units:1,request_id:requestId,rental_terms_accepted:true};
   const [a,b]=await Promise.all([request("user","/v1/actions/rent",body),request("user","/v1/actions/rent",body)]);
   strict.equal(a.status,200);strict.equal(b.status,200);
   const first:any=await a.json(),second:any=await b.json();
   strict.deepEqual(second,first);strict.equal(first.success,true);strict.equal(typeof first.id,"string");
-  const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE user_id=$1 AND type='rental_charge'",[user.id]);strict.equal(n,1);
-  const [wallet]=await q("SELECT balance FROM wallets WHERE user_id=$1 AND currency='USDT'",[user.id]);strict.equal(wallet.balance,"19.000000000000000000");
+  const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE user_id=$1 AND type='rental_principal_lock'",[user.id]);strict.equal(n,1);
+  const [wallet]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1 AND currency='USDT'",[user.id]);
+  strict.equal(wallet.balance,"20.000000000000000000");strict.equal(wallet.locked,"10.000000000000000000");
 });
 test("Manual-only withdrawal fixtures reject submission and release their reserve exactly once",async()=>{
   const user=people.get("user")!,id=uid(),requestId=uid();
   await transaction(async c=>{
+    await move(c,user.id,"USDT","20","test_funding","withdrawal-fixture",`withdrawal-fund:${user.id}`, "0");
     await move(c,user.id,"USDT","0","withdrawal_lock",id,`api-lock:${id}`,"11");
     await q(`INSERT INTO withdrawals(id,user_id,currency,network,address,amount,fee,status,data) VALUES($1,$2,'USDT','BEP20','TEST ONLY','10','1','manual_fallback',$3::jsonb)`,[id,user.id,JSON.stringify({total:"11",test_only:true})],c);
   });
@@ -127,7 +143,7 @@ test("Manual-only withdrawal fixtures reject submission and release their reserv
   strict.equal((await request("superadmin","/admin/actions/withdrawal-reject",body)).status,200);
   strict.equal((await request("superadmin","/admin/actions/withdrawal-reject",body)).status,200);
   const [wallet]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1 AND currency='USDT'",[user.id]);
-  strict.equal(wallet.balance,"19.000000000000000000");strict.equal(wallet.locked,"0.000000000000000000");
+  strict.equal(wallet.balance,"40.000000000000000000");strict.equal(wallet.locked,"10.000000000000000000");
   const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='withdrawal_rejected'",[id]);strict.equal(n,1);
 });
 test("A real private upload is owner/reviewer-only until attached as a finance proof",async()=>{
@@ -161,6 +177,7 @@ test.after(async()=>{
       await q("DELETE FROM deposits WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM withdrawals WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM assets WHERE id=$1",[assetId],c);
+      if(profitAssetId)await q("DELETE FROM assets WHERE id=$1",[profitAssetId],c);
       await q("DELETE FROM ledger WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM private_files WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM platform_records WHERE user_id=ANY($1::text[])",[ids],c);

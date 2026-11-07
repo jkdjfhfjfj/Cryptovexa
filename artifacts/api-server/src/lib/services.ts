@@ -380,8 +380,17 @@ async function scheduledRates(){
         const [current]=await q("SELECT * FROM assets WHERE id=$1 FOR UPDATE",[a.id],c);
         if(!current?.data.scheduled_changes?.some((ch:any)=>ch.at===change.at&&!ch.applied))return;
         const updates=current.data.scheduled_changes.map((ch:any)=>ch.at===change.at?{...ch,applied:true}:ch);
-        await q("UPDATE assets SET minute_rate=$1,hour_rate=$2,day_rate=$3,data=jsonb_set(data,'{scheduled_changes}',$4::jsonb) WHERE id=$5",
-          [rates.minute===null?"0":rates.minute??current.minute_rate,rates.hour===null?"0":rates.hour??current.hour_rate,rates.day===null?"0":rates.day??current.day_rate,JSON.stringify(updates),a.id],c);
+        const changed=["minute","hour","day"].filter(k=>rates[k]!==undefined);
+        const basis=change.profit_rate_basis??(changed.includes(current.data?.profit_rate_basis)?current.data.profit_rate_basis:changed[0]??"hour");
+        const entered=rates[basis];
+        if(entered===undefined)return;
+        const value=entered===null?"0":String(entered);
+        const [converted]=await q(`SELECT
+          (CASE WHEN $1='minute' THEN $2::numeric WHEN $1='hour' THEN round($2::numeric/60,18) ELSE round($2::numeric/1440,18) END)::text AS minute,
+          (CASE WHEN $1='minute' THEN $2::numeric*60 WHEN $1='hour' THEN $2::numeric ELSE round($2::numeric/24,18) END)::text AS hour,
+          (CASE WHEN $1='minute' THEN $2::numeric*1440 WHEN $1='hour' THEN $2::numeric*24 ELSE $2::numeric END)::text AS day`,[basis,value],c);
+        await q("UPDATE assets SET minute_rate=$1,hour_rate=$2,day_rate=$3,data=data||$4::jsonb WHERE id=$5",
+          [converted.minute,converted.hour,converted.day,JSON.stringify({scheduled_changes:updates,profit_rate_basis:basis,profit_rate_value:value}),a.id],c);
       });
     }
   }

@@ -63,7 +63,7 @@ function useRouteMeta() {
     const adminMod = loc.match(/^\/admin\/(\w+)/)?.[1];
     const page = adminMod && adminMod !== 'login' ? `Console · ${adminMod.charAt(0).toUpperCase()}${adminMod.slice(1)}` : hit?.[1] || 'Not found';
     const title = `${page} · ${brand.name}`;
-    const desc = String(settings.description || `${brand.name}: rent properties and machines by the minute, hour or day, paid in crypto.`);
+    const desc = String(settings.description || `${brand.name}: browse virtual rentals with admin-set profit schedules and clear capital requirements.`);
     document.title = title;
     setMeta('name', 'description', desc);
     setMeta('property', 'og:title', title);

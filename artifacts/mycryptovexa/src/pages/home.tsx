@@ -125,7 +125,7 @@ export default function HomePage() {
         {!user ? (
           <SignInPrompt body={`Sign in to ${brand.name} to see live timers and spend for every rental you run.`} />
         ) : rentals.length === 0 ? (
-          <EmptyState icon={Timer} title={t('noRentals')} body="Pick a property or machine and pay by the minute, hour or day." action={<Link href="/market" className="rounded-full bg-primary text-primary-foreground px-5 py-2.5 text-sm font-semibold" data-testid="link-browse">{t('browseMarket')}</Link>} />
+          <EmptyState icon={Timer} title={t('noRentals')} body="Choose an in-app rental term, review the locked capital and profit estimate, then track settlement here." action={<Link href="/market" className="rounded-full bg-primary text-primary-foreground px-5 py-2.5 text-sm font-semibold" data-testid="link-browse">{t('browseMarket')}</Link>} />
         ) : (
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
             {rentals.map((r) => (
@@ -146,7 +146,7 @@ export default function HomePage() {
         {assets.length ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">{assets.map((a, i) => <AssetCard key={String(a.id)} a={a} i={i} />)}</div>
         ) : (
-          <EmptyState icon={Store} title="Nothing listed yet" body="New properties and machines appear here as soon as they are published." />
+          <EmptyState icon={Store} title="Nothing listed yet" body="New virtual rentals appear here as soon as they are published." />
         )}
       </section>
       <p className="text-xs text-muted-foreground text-center pt-2">{t('risk')} <Link href="/legal/risk" className="underline">Risk disclosure</Link></p>

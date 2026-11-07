@@ -21,7 +21,7 @@ export default function AdminDashboard() {
     { l: 'Pending withdrawals', v: count('pending_withdrawals', (w) => ['queued', 'processing', 'pending_confirm'].includes(String(w.status))), i: ArrowUpFromLine, to: 'withdrawals' },
     { l: 'Manual fallback', v: s.manual_fallback ?? list(state.withdrawals).filter((w) => w.status === 'manual_fallback').length, i: Hand, to: 'withdrawals' },
     { l: 'Active rentals', v: s.active_rentals ?? list(state.rentals).filter((r) => r.status === 'active').length, i: Timer, to: 'rentals' },
-    { l: 'Revenue', v: s.revenue != null ? (typeof s.revenue === 'object' ? Object.entries(s.revenue as R).map(([k, v]) => `${amount(v)} ${k}`).join(' · ') : amount(s.revenue)) : '—', i: Coins },
+    { l: 'Rental net cash flow', v: s.revenue != null ? (typeof s.revenue === 'object' ? Object.entries(s.revenue as R).map(([k, v]) => `${amount(v)} ${k}`).join(' · ') : amount(s.revenue)) : '—', i: Coins },
     { l: 'Open tickets', v: s.open_tickets ?? list(state.tickets).filter((t) => t.status === 'open').length, i: Headset, to: 'support' },
     { l: 'Pending KYC', v: s.pending_kyc ?? list(state.kycRequests).filter((k) => k.status === 'submitted').length, i: ShieldCheck, to: 'kyc' },
   ];
@@ -47,7 +47,7 @@ export default function AdminDashboard() {
         </div>
       </div>
       <div className="grid xl:grid-cols-2 gap-4">
-        {[['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['revenue', 'Revenue'], ['signups', 'Signups']].map(([k, label]) => (
+        {[['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['revenue', 'Rental net cash flow'], ['signups', 'Signups']].map(([k, label]) => (
           <Section key={k} title={label}>
             {series.length ? (
               <div className="h-56">

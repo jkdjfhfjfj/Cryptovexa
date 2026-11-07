@@ -199,7 +199,7 @@ export function AdminReports() {
       {totals.length > 0 && <Section title="Ledger totals"><div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2">{totals.map((t) => <div key={String(t.currency)} className="rounded-2xl border p-3"><div className="text-xs text-muted-foreground">{t.currency}</div><div className="num font-semibold">{amount(t.total ?? t.sum)}</div>{t.mismatch && <div className="text-xs text-destructive">Mismatch {amount(t.mismatch)}</div>}</div>)}</div></Section>}
       <Section title="Exports">
         <a href="/api/admin/backup" className="inline-flex rounded-full border px-4 py-2 text-sm hover:bg-muted mb-3">Export platform data backup</a>
-        <div className="flex flex-wrap gap-2">{['deposits', 'withdrawals', 'rentals', 'ledger', 'revenue', 'commissions', 'users'].map((k) => <a key={k} href={adminExportUrl(k)} className="rounded-full border px-4 py-2 text-sm hover:bg-muted" data-testid={`link-export-${k}`}>{titleCase(k)} CSV</a>)}</div>
+        <div className="flex flex-wrap gap-2">{['deposits', 'withdrawals', 'rentals', 'ledger', 'revenue', 'commissions', 'users'].map((k) => <a key={k} href={adminExportUrl(k)} className="rounded-full border px-4 py-2 text-sm hover:bg-muted" data-testid={`link-export-${k}`}>{k === 'revenue' ? 'Rental cash flow' : titleCase(k)} CSV</a>)}</div>
       </Section>
     </div>
   );

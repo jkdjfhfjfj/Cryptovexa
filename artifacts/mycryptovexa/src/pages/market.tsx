@@ -44,8 +44,8 @@ export default function MarketPage() {
         <div className="absolute inset-0 bg-gradient-to-r from-[#0B1A2E] via-[#0B1A2E]/80 to-transparent rtl:bg-gradient-to-l" />
         <div className="relative p-6 md:p-10 max-w-xl">
           <span className="text-xs uppercase tracking-[0.25em] text-[#5eead4]">{t('market')}</span>
-          <h1 className="text-3xl md:text-4xl font-semibold mt-2 leading-tight">Lofts, studios, rigs and heavy machines. Billed to the minute.</h1>
-          <p className="text-white/70 text-sm mt-3">Every rate is fixed at the moment you start. Stop early and unused time is refunded under published billing rules.</p>
+          <h1 className="text-3xl md:text-4xl font-semibold mt-2 leading-tight">Choose a rental term and see its profit schedule.</h1>
+          <p className="text-white/70 text-sm mt-3">Each listing shows the required locked capital and estimated profit. Rates are fixed when you start; early stops settle prorated profit.</p>
         </div>
       </div>
       <PageHeader title={t('browseMarket')} sub={`${shown.length} listings`} icon={Store} />

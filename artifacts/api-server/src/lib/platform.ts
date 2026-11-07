@@ -227,7 +227,7 @@ export async function seedPlatform() {
     ["getting-started","Getting started with your account","Getting started","Create an account, review the risk disclosure and secure your account with two-factor authentication. Fund your wallet only after the administrator has configured a verified deposit address."],
     ["deposits","How crypto deposits work","Wallet & payments","Choose your coin and network. Send funds to the displayed address, then submit the exact amount and transaction ID. When automatic Binance deposits are enabled, only a successful exact match is credited; anything unverified remains in the manual review queue."],
     ["withdrawals","Withdrawing your crypto","Wallet & payments","Save a destination address and wait for the 24-hour security cooldown. Check fees and network before submitting. Verify the emailed code or your authenticator. Administrators can process withdrawals manually when automatic service is unavailable."],
-    ["rentals","Minute, hour or day?","Rentals","Choose the billing mode that fits your use. Minute rentals are charged as time passes. Hourly and daily rentals prepay their period. Rates are fixed when you book. If your balance is too low, your rental may pause and then stop."],
+    ["rentals","Rental profit and settlement","Rentals","Each listing displays its required capital and admin-configured profit rates per minute, hour and day. Capital is locked when you book. At maturity, the principal is released and the scheduled profit is credited. Early stops release principal and settle prorated profit. Rates are snapshotted when you book."],
     ["referrals","Invite friends responsibly","Referrals","Share your unique link. Commissions depend on the administrator's current settings. Earnings are never guaranteed. Self-referrals are not permitted."],
     ["security","Protecting your account","Security","Use a strong unique password and enable two-factor authentication. Review active sessions, revoke unknown devices and never share recovery codes."],
     ["kyc","Identity verification explained","Verification","If verification is requested, upload only the specified documents through the secure upload flow. Staff review your documents and may request clearer images. Withdrawals may be blocked until approval."],
@@ -235,12 +235,27 @@ export async function seedPlatform() {
   ];
   for (const [slug,title,category,body] of articles) await db.insert(records).values({ id:`article-${slug}`,kind:"article",data:{slug,title,category,body,language:"en",published:true,helpful_yes:0,helpful_no:0} }).onConflictDoNothing();
   const legal: Record<string,string> = {
-    terms: "By using {{site_name}}, you agree to the rental terms, payment rules and acceptable-use requirements. Rentals reserve listed resources and do not promise investment income. Availability is subject to verification. Contact support about disputes. This draft requires jurisdiction-specific legal review before launch.",
+    terms: "By using {{site_name}}, you agree to the rental terms, payment rules and acceptable-use requirements. Before booking, review the displayed capital requirement, profit schedule and duration. Capital is locked for the term. At maturity, principal is released and profit is credited using the rate snapshot; early stops settle prorated profit. Contact support about disputes. This draft requires jurisdiction-specific legal review before launch.",
     privacy: "{{site_name}} processes account details, rental history, payment information and requested identity documents to provide and secure the service. Identity documents are restricted to authorized staff. Contact support to request access, correction or deletion where applicable. This draft requires legal review before launch.",
-    risk: "Cryptocurrency involves significant risk. Prices may change sharply, network transfers can be irreversible, and funds may be lost by selecting the wrong address or network. Returns are not guaranteed. Renting assets is not a promise of profit. Do not commit funds you cannot afford to lose.",
+    risk: "Cryptocurrency transfers can be irreversible, and funds may be lost by selecting the wrong address or network. Rental principal remains locked for the selected term. Profit follows the rate and duration displayed at booking; early stops settle prorated profit. Withdrawals remain subject to account checks, operator processing and network availability. This draft requires jurisdiction-specific legal review before launch.",
   };
   for (const [key,body] of Object.entries(legal)) await db.insert(records).values({id:`legal-${key}-en`,kind:"legal",data:{key,language:"en",body}}).onConflictDoNothing();
-  await db.insert(records).values({id:"welcome",kind:"announcement",data:{title:"Your next space. Your next possibility.",body:"Explore properties and machines. Rent on your terms, pay with crypto.",type:"info",active:true}}).onConflictDoNothing();
+  const oldDefaults:Record<string,string>={
+    "article-rentals":"Choose the billing mode that fits your use. Minute rentals are charged as time passes. Hourly and daily rentals prepay their period. Rates are fixed when you book. If your balance is too low, your rental may pause and then stop.",
+    "legal-terms-en":"By using {{site_name}}, you agree to the rental terms, payment rules and acceptable-use requirements. Rentals reserve listed resources and do not promise investment income. Availability is subject to verification. Contact support about disputes. This draft requires jurisdiction-specific legal review before launch.",
+    "legal-risk-en":"Cryptocurrency involves significant risk. Prices may change sharply, network transfers can be irreversible, and funds may be lost by selecting the wrong address or network. Returns are not guaranteed. Renting assets is not a promise of profit. Do not commit funds you cannot afford to lose.",
+  };
+  for(const [slug,title,category,body] of articles)if(slug==="rentals")
+    await q("UPDATE platform_records SET data=data||$1::jsonb WHERE id='article-rentals' AND kind='article' AND data->>'body'=$2",
+      [JSON.stringify({title,category,body}),oldDefaults["article-rentals"]]);
+  for(const [key,body] of Object.entries(legal)){
+    const old=oldDefaults[`legal-${key}-en`];
+    if(old)await q("UPDATE platform_records SET data=data||$1::jsonb WHERE id=$2 AND kind='legal' AND data->>'body'=$3",
+      [JSON.stringify({body}),`legal-${key}-en`,old]);
+  }
+  await db.insert(records).values({id:"welcome",kind:"announcement",data:{title:"Your next space. Your next possibility.",body:"Browse virtual rentals and review the required capital and estimated profit before booking.",type:"info",active:true}}).onConflictDoNothing();
+  await q("UPDATE platform_records SET data=data||$1::jsonb WHERE id='welcome' AND kind='announcement' AND data->>'title'='Your next space. Your next possibility.' AND data->>'body'='Explore properties and machines. Rent on your terms, pay with crypto.'",
+    [JSON.stringify({body:"Browse virtual rentals and review the required capital and estimated profit before booking."})]);
   const templates=["welcome","verify_email","password_reset","password_changed","new_login","twofa_changed","twofa_reset","account_updated",
     "deposit_submitted","deposit_approved","deposit_rejected","deposit_info","withdrawal_requested","withdrawal_confirmation","withdrawal_sent","withdrawal_rejected","withdrawal_manual",
     "rental_started","rental_extended","rental_completed","rental_stopped","rental_low_balance","rental_auto_renewed","rental_resumed","rental_ending_soon",

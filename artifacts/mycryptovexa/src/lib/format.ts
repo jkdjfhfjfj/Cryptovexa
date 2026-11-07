@@ -72,5 +72,14 @@ export const titleCase = (s?: string) => (s || '').replace(/[_-]/g, ' ').replace
 /** Keep storage/audit event names stable while showing user-friendly ledger terminology. */
 export const ledgerLabel = (value: unknown) => {
   const label = String(value ?? '').replace(/_/g, ' ');
-  return label === 'admin adjustment' ? 'Balance adjustment' : label;
+  const labels: Record<string, string> = {
+    'admin adjustment': 'Balance adjustment',
+    'rental principal lock': 'Rental principal locked',
+    'rental principal release': 'Rental principal released',
+    'rental profit': 'Rental profit payout',
+    'rental charge': 'Legacy rental charge',
+    'rental refund': 'Legacy rental refund',
+    'rental extension': 'Legacy rental extension',
+  };
+  return labels[label] ?? label;
 };

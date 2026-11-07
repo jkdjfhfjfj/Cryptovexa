@@ -3,7 +3,7 @@ import { randomInt } from "node:crypto";
 import { UserActionBody } from "@workspace/api-zod";
 import { z } from "zod";
 import { q, uid, hash, config, requireUser, amount, str, assert, transaction, record, ownedRecord, getRecords, move, event, token, replayRequest } from "../lib/platform";
-import { startRental, stopRental, extendRental } from "../lib/rentals";
+import { startRental, stopRental, extendRental, billRental } from "../lib/rentals";
 import { checkTwofa } from "./accounts";
 import { getBinanceDepositAddress, getCachedBinanceDepositAddress, marketRates } from "../lib/services";
 
@@ -154,13 +154,14 @@ userActions.post("/v1/actions/:action",async(req,res):Promise<void>=>{
       await q("UPDATE withdrawals SET status='queued' WHERE id=$1 AND user_id=$2 AND status='pending_confirm'",[b.id,u.id],c);
       result.message="Withdrawal confirmed and queued";
     }else if(action==="rent"){
-      assert(b.virtual_terms_accepted===true,"Acknowledge that this is a virtual, in-app rental only");
+      assert(b.rental_terms_accepted===true,"Accept the rental capital and profit settlement terms");
       const rental=await startRental(u,b,c);result={...result,id:rental.id,message:"Rental started"};
     }else if(action==="rental-stop"){await stopRental(u,b,c);result.message="Rental stopped";}
     else if(action==="rental-extend"){await extendRental(u,b,c);result.message="Rental extended";}
     else if(action==="rental-renew"){
-      const rows=await q("UPDATE rentals SET auto_renew=$1 WHERE id=$2 AND user_id=$3 AND status='active' RETURNING id",[Boolean(b.auto_renew),str(b.id),u.id],c);
+      const rows=await q("UPDATE rentals SET auto_renew=$1 WHERE id=$2 AND user_id=$3 AND status='active' RETURNING id,data",[Boolean(b.auto_renew),str(b.id),u.id],c);
       assert(rows.length,"Active rental not found");
+      if(rows[0].data?.rental_model_version===2)await billRental(c,rows[0].id,new Date());
     }else if(action==="ticket-create"){
       const subject=str(b.subject,3,200),body=str(b.body,3,10000);
       for(const p of b.attachments??[])await ownedFile(p,u,c);

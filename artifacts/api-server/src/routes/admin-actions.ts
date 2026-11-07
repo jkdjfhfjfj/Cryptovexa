@@ -151,8 +151,18 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
       const id=b.id?str(b.id):uid(),type=z.enum(["property","machine"]).parse(b.type), rates=b.rates??{};
       const units=Number(b.total_units??1);
       assert(Number.isInteger(units)&&units>=1&&units<=100000,"Invalid total units");
-      const minute=String(rates.minute??b.minute_rate??"0"),hour=String(rates.hour??b.hour_rate??"0"),day=String(rates.day??b.day_rate??"0");
-      for(const rate of [minute,hour,day])assert(/^\d{1,18}(\.\d{1,18})?$/.test(rate),"Rates must be decimal strings");
+      const basis=z.enum(["minute","hour","day"]).parse(b.profit_rate_basis??"hour");
+      const submittedRate=String(b.profit_rate_value??rates[basis]??"0").trim()||"0";
+      const capital=String(b.capital_required??"0").trim()||"0";
+      assert(/^\d{1,18}(\.\d{1,18})?$/.test(submittedRate),"Profit rates must be decimal strings");
+      assert(/^\d{1,18}(\.\d{1,18})?$/.test(capital),"Required capital must be a decimal string");
+      const [{minute,hour,day,validCapital,validRate}]=await q(`SELECT
+        (CASE WHEN $1='minute' THEN $2::numeric WHEN $1='hour' THEN round($2::numeric/60,18) ELSE round($2::numeric/1440,18) END)::text AS minute,
+        (CASE WHEN $1='minute' THEN $2::numeric*60 WHEN $1='hour' THEN $2::numeric ELSE round($2::numeric/24,18) END)::text AS hour,
+        (CASE WHEN $1='minute' THEN $2::numeric*1440 WHEN $1='hour' THEN $2::numeric*24 ELSE $2::numeric END)::text AS day,
+        $3::numeric>0 AS "validCapital",$2::numeric>0 AS "validRate"`,[basis,submittedRate,capital],c);
+      const status=z.enum(["active","inactive","maintenance"]).parse(b.status??"active");
+      assert(status!=="active"||(validCapital&&validRate),"Active assets need required capital and a positive profit rate");
       const [existing]=await q("SELECT * FROM assets WHERE id=$1 FOR UPDATE",[id],c);
       const reserved=existing?existing.total_units-existing.available_units:0;
       assert(units>=reserved,"Total units cannot be below currently reserved units");
@@ -163,14 +173,15 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
       const min=Number(b.min_duration??1),max=Number(b.max_duration??43200);
       assert(Number.isInteger(min)&&Number.isInteger(max)&&min>0&&max>=min,"Invalid duration limits");
       const discounts=z.array(z.object({min_units:z.coerce.number().int().min(1).optional(),min_duration:z.coerce.number().int().min(1).optional(),percent:z.union([z.string(),z.number()]).transform(String).refine(s=>/^\d{1,2}(\.\d{1,18})?$/.test(s)&&Number(s)<100,"Discount must be below 100 percent")})).max(100).parse(b.discount_rules??[]);
-      const schedules=z.array(z.object({at:z.string().datetime(),rates:z.record(z.union([z.string().regex(/^\d{1,18}(\.\d{1,18})?$/),z.null()])).optional(),minute:z.string().regex(/^\d{1,18}(\.\d{1,18})?$/).optional(),hour:z.string().regex(/^\d{1,18}(\.\d{1,18})?$/).optional(),day:z.string().regex(/^\d{1,18}(\.\d{1,18})?$/).optional(),applied:z.boolean().optional()})).max(100).parse(b.scheduled_changes??[]);
+      const schedules=z.array(z.object({at:z.string().datetime(),profit_rate_basis:z.enum(["minute","hour","day"]).optional(),rates:z.record(z.union([z.string().regex(/^\d{1,18}(\.\d{1,18})?$/),z.null()])).optional(),minute:z.string().regex(/^\d{1,18}(\.\d{1,18})?$/).optional(),hour:z.string().regex(/^\d{1,18}(\.\d{1,18})?$/).optional(),day:z.string().regex(/^\d{1,18}(\.\d{1,18})?$/).optional(),applied:z.boolean().optional()})).max(100).parse(b.scheduled_changes??[]);
       await q(`INSERT INTO assets(id,type,title,description,location,category,images,specs,status,total_units,available_units,currency,minute_rate,hour_rate,day_rate,min_duration,max_duration,data)
         VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb)
         ON CONFLICT(id) DO UPDATE SET type=excluded.type,title=excluded.title,description=excluded.description,location=excluded.location,category=excluded.category,
         images=excluded.images,specs=excluded.specs,status=excluded.status,total_units=excluded.total_units,available_units=excluded.available_units,currency=excluded.currency,
         minute_rate=excluded.minute_rate,hour_rate=excluded.hour_rate,day_rate=excluded.day_rate,min_duration=excluded.min_duration,max_duration=excluded.max_duration,data=excluded.data`,
         [id,type,str(b.title,2,200),str(b.description??"",0,10000),str(b.location??"",0,200),str(b.category??"General"),JSON.stringify(images),JSON.stringify(b.specs??{}),
-          z.enum(["active","inactive","maintenance"]).parse(b.status??"active"),units,available,z.enum(["BNB","USDT","USDC","BTC","ETH"]).parse(b.currency??"USDT"),minute,hour,day,min,max,JSON.stringify({discount_rules:discounts,scheduled_changes:schedules})],c);
+          status,units,available,z.enum(["BNB","USDT","USDC","BTC","ETH"]).parse(b.currency??"USDT"),minute,hour,day,min,max,
+          JSON.stringify({capital_required:capital,profit_rate_basis:basis,profit_rate_value:submittedRate,discount_rules:discounts,scheduled_changes:schedules})],c);
       result.id=id;
     }else if(action==="asset-delete"){
       const existing=await q("SELECT id FROM rentals WHERE asset_id=$1 LIMIT 1",[str(b.id)],c);
@@ -282,10 +293,14 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
     }else if(action==="rental-stop"){str(b.reason,3,2000);await stopRental(u,b,c,true);}
     else if(action==="rental-extend"){await extendRental(u,b,c,true);}
     else if(action==="rental-pause"){
+      const [activeRental]=await q("SELECT data FROM rentals WHERE id=$1 AND status='active' FOR UPDATE",[str(b.id)],c);
+      assert(activeRental,"Active rental not found");
+      assert(activeRental.data?.rental_model_version!==2,"Profit-bearing rentals cannot be paused; use force stop to settle them early");
       await q("UPDATE rentals SET status='paused',data=data||$1::jsonb WHERE id=$2 AND status='active'",[JSON.stringify({paused_at:new Date().toISOString(),admin_paused:true}),str(b.id)],c);
     }else if(action==="rental-resume"){
       const [r]=await q("SELECT * FROM rentals WHERE id=$1 AND status='paused' FOR UPDATE",[str(b.id)],c);
       assert(r?.data.admin_paused,"Only a staff-paused rental can be manually resumed");
+      assert(r.data?.rental_model_version!==2,"Profit-bearing rentals cannot be paused");
       const since=r.data.paused_at;
       await q(`UPDATE rentals SET status='active',billed_until=now()+GREATEST(interval '0 seconds',billed_until-$1::timestamptz),
         end_at=now()+GREATEST(interval '0 seconds',end_at-$1::timestamptz),data=data-'admin_paused'-'paused_at' WHERE id=$2`,[since,r.id],c);

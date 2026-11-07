@@ -8,7 +8,13 @@ import { marketRates } from "../lib/services";
 
 export const workspace: IRouter=Router();
 const storage=new ObjectStorageService();
-const assetView=(a:any)=>({...a,...a.data,rates:Object.fromEntries(["minute","hour","day"].map(k=>[k,/^0(?:\.0*)?$/.test(a[`${k}_rate`])?null:a[`${k}_rate`]]))});
+const isZero=(value:unknown)=>/^0(?:\.0*)?$/.test(String(value??"0"));
+const assetView=(a:any)=>{
+  const capital=String(a.data?.capital_required??"0");
+  const configured=!isZero(capital)&&["minute","hour","day"].some(k=>!isZero(a[`${k}_rate`]));
+  return {...a,...a.data,capital_required:capital,profit_model_configured:configured,
+    rates:Object.fromEntries(["minute","hour","day"].map(k=>[k,configured&&!isZero(a[`${k}_rate`])?String(a[`${k}_rate`]):null]))};
+};
 const rentalView=(r:any)=>({...r,...r.data});
 async function baseState(admin=false){
   const cfg=await config();
@@ -80,11 +86,11 @@ workspace.get("/admin/workspace",async(req,res):Promise<void>=>{
     (SELECT count(*) FROM rentals WHERE status='active')::integer AS active_rentals,
     (SELECT count(*) FROM platform_records WHERE kind='ticket' AND data->>'status' IN ('open','awaiting_user'))::integer AS open_tickets,
     (SELECT count(*) FROM platform_records WHERE kind='kyc' AND data->>'status'='submitted')::integer AS pending_kyc`);
-  const revenue=await q("SELECT currency,(-sum(amount))::text AS total FROM ledger WHERE type IN ('rental_charge','rental_extension','rental_refund') GROUP BY currency");
+  const revenue=await q("SELECT currency,(-sum(amount))::text AS total FROM ledger WHERE type IN ('rental_charge','rental_extension','rental_refund','rental_profit') GROUP BY currency");
   const series=await q(`SELECT to_char(d,'Mon DD') AS date,
     (SELECT COALESCE(sum(amount_credited),0)::text FROM deposits WHERE currency='USDT' AND status='approved' AND created_at::date=d::date) AS deposits,
     (SELECT COALESCE(sum(amount),0)::text FROM withdrawals WHERE currency='USDT' AND status='sent' AND created_at::date=d::date) AS withdrawals,
-    (SELECT COALESCE(-sum(amount),0)::text FROM ledger WHERE currency='USDT' AND type IN ('rental_charge','rental_refund','rental_extension') AND created_at::date=d::date) AS revenue,
+    (SELECT COALESCE(-sum(amount),0)::text FROM ledger WHERE currency='USDT' AND type IN ('rental_charge','rental_refund','rental_extension','rental_profit') AND created_at::date=d::date) AS revenue,
     (SELECT count(*)::integer FROM users WHERE created_at::date=d::date AND role='user') AS signups
     FROM generate_series(date_trunc('day',now())-interval '13 days',date_trunc('day',now()),interval '1 day') d`);
   const totals=await q("SELECT currency,sum(amount)::text AS total FROM ledger GROUP BY currency");
@@ -148,8 +154,14 @@ workspace.get("/v1/rentals/:id/invoice",async(req,res):Promise<void>=>{
   const doc=new PDFDocument({margin:50});doc.pipe(res);
   doc.fillColor("#0B1A2E").fontSize(26).text(cfg.site_name).moveDown().fontSize(18).text("Rental invoice").moveDown();
   doc.fontSize(11).text(`Invoice: ${r.id}`).text(`Customer: ${u.email}`).text(`Asset: ${r.title}`).text(`Billing: ${r.billing_mode}`).text(`Units: ${r.units}`)
-    .text(`Started: ${new Date(r.start_at).toISOString()}`).text(`Ends: ${new Date(r.end_at).toISOString()}`).text(`Status: ${r.status}`)
-    .moveDown().fontSize(16).text(`Total charged: ${r.total_cost} ${r.data.currency}`).moveDown().fontSize(10).text("Cryptocurrency involves risk. Returns are not guaranteed.").end();
+    .text(`Started: ${new Date(r.start_at).toISOString()}`).text(`Ends: ${new Date(r.end_at).toISOString()}`).text(`Status: ${r.status}`).moveDown();
+  if(r.data?.rental_model_version===2){
+    doc.fontSize(12).text(`Principal locked: ${r.data.principal_amount} ${r.data.currency}`)
+      .text(`Estimated term profit: ${r.data.expected_profit} ${r.data.currency}`)
+      .text(`Profit paid: ${r.data.profit_paid??r.total_cost} ${r.data.currency}`)
+      .text(`Settlement: ${r.data.settlement??(r.status==="active"?"Pending maturity":"Pending")}`);
+  }else doc.fontSize(16).text(`Total charged: ${r.total_cost} ${r.data.currency}`);
+  doc.end();
 });
 const csv=(rows:any[])=>{
   if(!rows.length)return "No records\n";
@@ -162,7 +174,7 @@ workspace.get(["/v1/export/:kind","/admin/export/:kind"],async(req,res):Promise<
   assert(["ledger","rentals","deposits","withdrawals","users","audit_logs","email_logs","revenue","commissions","referrals"].includes(kind),"Unknown export",404);
   assert(admin||!["users","audit_logs","email_logs"].includes(kind),"Not allowed",403);
   if(admin)assert(u.role==="superadmin"||(["ledger","rentals","deposits","withdrawals","revenue"].includes(kind)&&u.role==="finance"),"Not allowed",403);
-  const rows=kind==="revenue"?await q(`SELECT currency,type,sum(amount)::text AS total FROM ledger WHERE type IN ('rental_charge','rental_refund','rental_extension') ${admin?"":"AND user_id=$1"} GROUP BY currency,type`,admin?[]:[u.id]):
+  const rows=kind==="revenue"?await q(`SELECT currency,type,sum(amount)::text AS total FROM ledger WHERE type IN ('rental_charge','rental_refund','rental_extension','rental_profit') ${admin?"":"AND user_id=$1"} GROUP BY currency,type`,admin?[]:[u.id]):
     kind==="commissions"||kind==="referrals"?await getRecords(kind==="commissions"?"commission":"referral",admin?undefined:u.id):
     await q(`SELECT * FROM ${kind} ${admin?"":"WHERE user_id=$1"} LIMIT 10000`,admin?[]:[u.id]);
   if(admin)await audit(u,"csv_export",kind,req);

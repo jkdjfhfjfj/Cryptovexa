@@ -3,7 +3,7 @@ import strict from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { pool } from "@workspace/db";
 import { q, uid, move, amount, encrypt, decrypt, putSetting, config, record, transaction, replayRequest, accountAllowedInEnvironment, defaultSettings, defaultEmailTemplateBody } from "../lib/platform";
-import { startRental, stopRental, billRental } from "../lib/rentals";
+import { startRental, stopRental, billRental, extendRental } from "../lib/rentals";
 import { approveDeposit } from "../lib/deposits";
 import { referralCommission, settleWithdrawal, deliverQueuedEmail, findVerifiedBinanceDeposit, creditVerifiedBinanceDeposit, binanceNetworkCode, renderEmailMessage } from "../lib/services";
 import { reviewDocuments } from "../lib/verification";
@@ -56,17 +56,35 @@ async function rentalFixture(c:any,u:any,mode="minute",duration=3,autoRenew=fals
   const id=uid();
   await q(`INSERT INTO assets(id,type,title,description,location,category,total_units,available_units,currency,minute_rate,hour_rate,day_rate)
     VALUES($1,'machine','Regression fixture','Test only','Test only','Test only',1,1,'USDT','1','5','20')`,[id],c);
+  const cfg=await config(false,c),rate=mode==="minute"?"1":mode==="hour"?"5":"20",minutes=duration*({minute:1,hour:60,day:1440} as Record<string,number>)[mode]!;
+  const [{baseCost,cost}]=await q('SELECT ($1::numeric*$2::integer)::text AS "baseCost",GREATEST($1::numeric*$2::integer,$3::numeric)::text AS cost',
+    [rate,mode==="minute"?1:duration,cfg.billing.minimum_charge??"0"],c);
+  const rentalId=uid();await move(c,u.id,"USDT",`-${cost}`,"rental_charge",rentalId,`legacy-rent:${rentalId}`);
+  const [r]=await q(`INSERT INTO rentals(id,user_id,asset_id,billing_mode,rate_snapshot,end_at,billed_until,total_cost,auto_renew,units,data)
+    VALUES($1,$2,$3,$4,$5,now()+$6*interval '1 minute',now()+$7*interval '1 minute',$8,$9,1,$10::jsonb) RETURNING *`,
+    [rentalId,u.id,id,mode,rate,minutes,mode==="minute"?1:minutes,cost,autoRenew,JSON.stringify({currency:"USDT",asset_title:"Legacy fixture",duration,billing:cfg.billing,base_cost:baseCost,rental_model_version:1})],c);
+  await q("UPDATE assets SET available_units=0 WHERE id=$1",[id],c);
+  return r;
+}
+async function profitRentalFixture(c:any,u:any,mode="minute",duration=3,autoRenew=false,capital="10"){
+  await move(c,u.id,"USDT","100","test_funding","funding",`profit-fund:${u.id}`);
+  const id=uid();
+  await q(`INSERT INTO assets(id,type,title,description,location,category,total_units,available_units,currency,minute_rate,hour_rate,day_rate,data)
+    VALUES($1,'machine','Profit fixture','Test only','Test only','Test only',1,1,'USDT','1','5','20',$2::jsonb)`,
+    [id,JSON.stringify({capital_required:capital,profit_rate_basis:"hour",profit_rate_value:"5"})],c);
   return startRental(u,{asset_id:id,billing_mode:mode,duration,units:1,auto_renew:autoRenew},c);
 }
-test("Delayed minute billing settles the last periods once before releasing capacity",async()=>{
+test("Maturity releases principal and credits the snapshotted profit once",async()=>{
   await sandbox(async(c,u)=>{
-    const r=await rentalFixture(c,u),clock=new Date(new Date(r.end_at).getTime()+60000);
+    const r=await profitRentalFixture(c,u),clock=new Date(new Date(r.end_at).getTime()+60000);
     await billRental(c,r.id,clock);
     await billRental(c,r.id,clock);
     const [saved]=await q("SELECT * FROM rentals WHERE id=$1",[r.id],c);
     const [a]=await q("SELECT available_units FROM assets WHERE id=$1",[r.asset_id],c);
-    strict.equal(saved.status,"completed");strict.equal(saved.total_cost,"3.000000000000000000");strict.equal(a.available_units,1);
-    const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id],c);strict.equal(w.balance,"97.000000000000000000");
+    strict.equal(saved.status,"completed");strict.equal(saved.total_cost,"3.000000000000000000");strict.equal(saved.data.profit_paid,"3.000000000000000000");strict.equal(a.available_units,1);
+    const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1",[u.id],c);strict.equal(w.balance,"103.000000000000000000");strict.equal(w.locked,"0.000000000000000000");
+    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_profit'",[r.id],c);strict.equal(n,1);
+    const [{valid}]=await q("SELECT balance=(SELECT COALESCE(sum(amount),0) FROM ledger WHERE user_id=$1 AND currency='USDT') AS valid FROM wallets WHERE user_id=$1 AND currency='USDT'",[u.id],c);strict.equal(valid,true);
   });
 });
 test("Prepaid low-balance resume requires and charges the entire renewal period",async()=>{
@@ -113,14 +131,21 @@ test("The upfront minimum counts toward usage instead of being charged twice",as
     strict.equal(saved.total_cost,"5.000000000000000000");
   });
 });
-test("Early-stop refunds use the rental's original currency after asset edits",async()=>{
+test("Early stop releases principal and pays prorated profit in the snapshotted currency",async()=>{
   await sandbox(async(c,u)=>{
-    const r=await rentalFixture(c,u,"hour",2);
+    const r=await profitRentalFixture(c,u,"hour",2);
+    await q("UPDATE rentals SET start_at=now()-interval '1 hour',end_at=now()+interval '1 hour',billed_until=now()+interval '1 hour' WHERE id=$1",[r.id],c);
     await q("UPDATE assets SET currency='BTC',hour_rate='0.1' WHERE id=$1",[r.asset_id],c);
     await stopRental(u,{id:r.id},c);
-    const [refund]=await q("SELECT currency FROM ledger WHERE user_id=$1 AND type='rental_refund'",[u.id],c);
-    strict.equal(refund.currency,"USDT");
-    const [saved]=await q("SELECT total_cost>=0 AS valid FROM rentals WHERE id=$1",[r.id],c);strict.ok(saved.valid);
+    const [profit]=await q("SELECT currency,amount FROM ledger WHERE user_id=$1 AND type='rental_profit' AND ref_id=$2",[u.id,r.id],c);
+    strict.equal(profit.currency,"USDT");
+    const [{valid}]=await q("SELECT $1::numeric BETWEEN 5::numeric AND 5.001::numeric AS valid",[profit.amount],c);strict.equal(valid,true);
+    const [saved]=await q("SELECT status,total_cost,data FROM rentals WHERE id=$1",[r.id],c);
+    const [{profitValid}]=await q("SELECT $1::numeric BETWEEN 5::numeric AND 5.001::numeric AS \"profitValid\"",[saved.total_cost],c);
+    strict.equal(saved.status,"cancelled");strict.equal(profitValid,true);strict.equal(saved.data.principal_amount,"10");
+    const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1 AND currency='USDT'",[u.id],c);
+    const [{balanceValid}]=await q("SELECT $1::numeric BETWEEN 105::numeric AND 105.001::numeric AS \"balanceValid\"",[w.balance],c);
+    strict.equal(balanceValid,true);strict.equal(w.locked,"0.000000000000000000");
   });
 });
 test("The actual deposit-review service credits an adjusted amount exactly once",async()=>{
@@ -234,8 +259,9 @@ async function concurrentFixture(fn:(u:any,assets:string[])=>Promise<void>,balan
     await transaction(async c=>{
       await q("INSERT INTO users(id,email,username,password_hash,referral_code) VALUES($1,$2,'QA concurrency fixture','unused',$3)",[id,email,uid()],c);
       await move(c,id,"USDT",balance,"test_funding","concurrency",`fund:${id}`);
-      for(const asset of assetIds)await q(`INSERT INTO assets(id,type,title,description,location,category,total_units,available_units,currency,hour_rate)
-        VALUES($1,'machine','QA concurrency fixture','Test only','Test only','Test only',1,1,'USDT','10')`,[asset],c);
+      for(const asset of assetIds)await q(`INSERT INTO assets(id,type,title,description,location,category,total_units,available_units,currency,hour_rate,data)
+        VALUES($1,'machine','QA concurrency fixture','Test only','Test only','Test only',1,1,'USDT','10',$2::jsonb)`,
+        [asset,JSON.stringify({capital_required:"10",profit_rate_basis:"hour",profit_rate_value:"10"})],c);
     });
     await fn({id},assetIds);
   }finally{
@@ -257,7 +283,7 @@ test("Concurrent bookings cannot overbook the same last available unit",async()=
     strict.equal(outcomes.filter(o=>o.status==="fulfilled").length,1);
     strict.equal(outcomes.filter(o=>o.status==="rejected").length,1);
     const [a]=await q("SELECT available_units FROM assets WHERE id=$1",[assets[0]]);strict.equal(a.available_units,0);
-    const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"90.000000000000000000");
+    const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"100.000000000000000000");strict.equal(w.locked,"10.000000000000000000");
   });
 });
 test("Concurrent rentals cannot spend the same wallet balance twice",async()=>{
@@ -265,7 +291,7 @@ test("Concurrent rentals cannot spend the same wallet balance twice",async()=>{
     const outcomes=await Promise.allSettled(assets.map(asset=>transaction(c=>startRental(u,{asset_id:asset,billing_mode:"hour",duration:1,units:1},c))));
     strict.equal(outcomes.filter(o=>o.status==="fulfilled").length,1);
     const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1",[u.id]);
-    strict.equal(w.balance,"0.000000000000000000");strict.equal(w.locked,"0.000000000000000000");
+    strict.equal(w.balance,"10.000000000000000000");strict.equal(w.locked,"10.000000000000000000");
     const [{n}]=await q("SELECT count(*)::integer AS n FROM rentals WHERE user_id=$1",[u.id]);strict.equal(n,1);
   },"10");
 });
@@ -280,29 +306,56 @@ test("Minute billing has one debit per billed boundary when ticks are replayed",
     const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id],c);strict.equal(w.balance,"97.000000000000000000");
   });
 });
-test("Concurrent billing workers settle expiry once and release capacity once",async()=>{
+test("Concurrent maturity workers credit profit and release capital once",async()=>{
   await concurrentFixture(async(u,assets)=>{
     await q("UPDATE assets SET minute_rate='1' WHERE id=$1",[assets[0]]);
     const r=await transaction(c=>startRental(u,{asset_id:assets[0],billing_mode:"minute",duration:3,units:1},c));
     const clock=new Date(new Date(r.end_at).getTime()+1);
     await Promise.all([transaction(c=>billRental(c,r.id,clock)),transaction(c=>billRental(c,r.id,clock))]);
-    const [saved]=await q("SELECT status,total_cost FROM rentals WHERE id=$1",[r.id]);
+    const [saved]=await q("SELECT status,total_cost,data FROM rentals WHERE id=$1",[r.id]);
     strict.equal(saved.status,"completed");strict.equal(saved.total_cost,"3.000000000000000000");
     const [a]=await q("SELECT available_units FROM assets WHERE id=$1",[assets[0]]);strict.equal(a.available_units,1);
-    const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"97.000000000000000000");
-    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_charge'",[r.id]);strict.equal(n,2);
+    const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"103.000000000000000000");strict.equal(w.locked,"0.000000000000000000");
+    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_profit'",[r.id]);strict.equal(n,1);
   });
 });
-test("Concurrent renewal workers prepay a new period only once",async()=>{
+test("Concurrent auto-renew workers pay each completed term once and keep capital locked",async()=>{
   await concurrentFixture(async(u,assets)=>{
     const r=await transaction(c=>startRental(u,{asset_id:assets[0],billing_mode:"hour",duration:1,units:1,auto_renew:true},c));
     const clock=new Date(new Date(r.end_at).getTime()+1);
     await Promise.all([transaction(c=>billRental(c,r.id,clock)),transaction(c=>billRental(c,r.id,clock))]);
-    const [saved]=await q("SELECT status,total_cost,billed_until FROM rentals WHERE id=$1",[r.id]);
-    strict.equal(saved.status,"active");strict.equal(saved.total_cost,"20.000000000000000000");
-    strict.equal(new Date(saved.billed_until).getTime(),clock.getTime()+3600000);
-    const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"80.000000000000000000");
-    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_charge'",[r.id]);strict.equal(n,2);
+    const [saved]=await q("SELECT status,total_cost,billed_until,data FROM rentals WHERE id=$1",[r.id]);
+    strict.equal(saved.status,"active");strict.equal(saved.total_cost,"10.000000000000000000");
+    strict.equal(new Date(saved.billed_until).getTime(),new Date(r.end_at).getTime()+3600000);
+    strict.equal(saved.data.profit_paid,"10.000000000000000000");
+    const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"110.000000000000000000");strict.equal(w.locked,"10.000000000000000000");
+    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_profit'",[r.id]);strict.equal(n,1);
+  });
+});
+test("Delayed auto-renew settles every completed term without duplicate credits",async()=>{
+  await sandbox(async(c,u)=>{
+    const r=await profitRentalFixture(c,u,"hour",1,true),durationMs=3600000;
+    const clock=new Date(new Date(r.end_at).getTime()+durationMs*2+1);
+    await billRental(c,r.id,clock);await billRental(c,r.id,clock);
+    const [saved]=await q("SELECT status,total_cost,end_at,data FROM rentals WHERE id=$1",[r.id],c);
+    strict.equal(saved.status,"active");strict.equal(saved.total_cost,"15.000000000000000000");
+    strict.equal(saved.data.profit_paid,"15.000000000000000000");
+    strict.equal(new Date(saved.end_at).getTime(),new Date(r.end_at).getTime()+durationMs*3);
+    const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1 AND currency='USDT'",[u.id],c);
+    strict.equal(w.balance,"115.000000000000000000");strict.equal(w.locked,"10.000000000000000000");
+    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_profit'",[r.id],c);strict.equal(n,1);
+    const [{valid}]=await q("SELECT balance=(SELECT sum(amount) FROM ledger WHERE user_id=$1 AND currency='USDT') AS valid FROM wallets WHERE user_id=$1 AND currency='USDT'",[u.id],c);strict.equal(valid,true);
+  });
+});
+test("Extending a profit rental updates its estimate without charging or unlocking principal",async()=>{
+  await sandbox(async(c,u)=>{
+    const r=await profitRentalFixture(c,u,"hour",1,false);
+    await extendRental(u,{id:r.id,duration:2},c);
+    const [saved]=await q("SELECT end_at,data FROM rentals WHERE id=$1",[r.id],c);
+    strict.equal(saved.data.expected_profit,"15.000000000000000000");strict.equal(saved.data.duration,3);
+    strict.equal(saved.data.duration_ms,"10800000");
+    const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1 AND currency='USDT'",[u.id],c);
+    strict.equal(w.balance,"100.000000000000000000");strict.equal(w.locked,"10.000000000000000000");
   });
 });
 test("Concurrent replay of the same request returns its saved booking without charging again",async()=>{
@@ -315,7 +368,7 @@ test("Concurrent replay of the same request returns its saved booking without ch
     });
     const [a,b]=await Promise.all([submit(),submit()]);strict.deepEqual(a,b);
     const [{n}]=await q("SELECT count(*)::integer AS n FROM rentals WHERE user_id=$1",[u.id]);strict.equal(n,1);
-    const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"90.000000000000000000");
+    const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"100.000000000000000000");strict.equal(w.locked,"10.000000000000000000");
   });
 });
 test("Mail retries preserve verification/reset data, honor backoff and stop after success",async()=>{
@@ -356,13 +409,18 @@ test("Email templates fall back to the actual request host or an embedded wordma
   strict.match(noHost.html,/>MCV<\/span>/);
   strict.doesNotMatch(noHost.html,/src="\/icon-192\.png"/);
 });
-test("Concurrent stop requests refund once and restore only the reserved capacity",async()=>{
+test("Concurrent early stops release capital and settle prorated profit once",async()=>{
   await concurrentFixture(async(u,assets)=>{
     const r=await transaction(c=>startRental(u,{asset_id:assets[0],billing_mode:"hour",duration:1,units:1},c));
+    await q("UPDATE rentals SET start_at=now()-interval '30 minutes',end_at=now()+interval '30 minutes',billed_until=now()+interval '30 minutes' WHERE id=$1",[r.id]);
     await Promise.all([transaction(c=>stopRental(u,{id:r.id},c)),transaction(c=>stopRental(u,{id:r.id},c))]);
-    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_refund'",[r.id]);strict.equal(n,1);
+    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_profit'",[r.id]);strict.equal(n,1);
+    const [{releases}]=await q("SELECT count(*)::integer AS releases FROM ledger WHERE ref_id=$1 AND type='rental_principal_release'",[r.id]);strict.equal(releases,1);
     const [a]=await q("SELECT available_units FROM assets WHERE id=$1",[assets[0]]);strict.equal(a.available_units,1);
-    const [{valid}]=await q("SELECT w.balance=(SELECT sum(amount) FROM ledger WHERE user_id=$1 AND currency='USDT') AS valid FROM wallets w WHERE user_id=$1 AND currency='USDT'",[u.id]);strict.equal(valid,true);
+    const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1 AND currency='USDT'",[u.id]);
+    const [{balanceValid}]=await q("SELECT $1::numeric BETWEEN 105::numeric AND 105.001::numeric AS \"balanceValid\"",[w.balance]);
+    strict.equal(balanceValid,true);strict.equal(w.locked,"0.000000000000000000");
+    const [{valid}]=await q("SELECT balance=(SELECT sum(amount) FROM ledger WHERE user_id=$1 AND currency='USDT') AS valid FROM wallets WHERE user_id=$1 AND currency='USDT'",[u.id]);strict.equal(valid,true);
   });
 });
 test("Encrypted settings round trip without retaining plaintext",()=>{
@@ -394,15 +452,19 @@ test("Rental rates are snapshotted and capacity is reserved transactionally",asy
   await sandbox(async(c,u)=>{
     await move(c,u.id,"USDT","100","deposit_credit","funding","fund-"+u.id);
     const id=uid();
-    await q(`INSERT INTO assets(id,type,title,description,location,category,total_units,available_units,currency,minute_rate,hour_rate,day_rate)
-      VALUES($1,'machine','Test GPU','test','test','test',1,1,'USDT','0.1','5','100')`,[id],c);
+    await q(`INSERT INTO assets(id,type,title,description,location,category,total_units,available_units,currency,minute_rate,hour_rate,day_rate,data)
+      VALUES($1,'machine','Test GPU','test','test','test',1,1,'USDT','0.1','5','100',$2::jsonb)`,
+      [id,JSON.stringify({capital_required:"10",profit_rate_basis:"hour",profit_rate_value:"5"})],c);
     const r=await startRental(u,{asset_id:id,billing_mode:"hour",duration:2,units:1,auto_renew:false},c);
     strict.ok(Number.isFinite(new Date(r.start_at).getTime()),"Rental start must serialize as a real date");
-    strict.equal(r.rate_snapshot,"5.000000000000000000");strict.equal(r.total_cost,"10.000000000000000000");
+    strict.equal(r.rate_snapshot,"5.000000000000000000");strict.equal(r.total_cost,"0.000000000000000000");
+    strict.equal(r.data.principal_amount,"10");strict.equal(r.data.expected_profit,"10.000000000000000000");
     await q("UPDATE assets SET hour_rate=20 WHERE id=$1",[id],c);
     const [saved]=await q("SELECT rate_snapshot FROM rentals WHERE id=$1",[r.id],c);
     strict.equal(saved.rate_snapshot,"5.000000000000000000");
     const [a]=await q("SELECT available_units FROM assets WHERE id=$1",[id],c);strict.equal(a.available_units,0);
+    const [w]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1 AND currency='USDT'",[u.id],c);
+    strict.equal(w.balance,"100.000000000000000000");strict.equal(w.locked,"10.000000000000000000");
   });
 });
 test.after(async()=>{await pool.end();});

@@ -70,8 +70,8 @@ export function HelpPage() {
       </div>
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_340px] gap-6">
         <div className="min-w-0">
-          <div className="flex w-full min-w-0 max-w-full gap-2 overflow-x-auto no-scrollbar mb-4" aria-label="Help categories">
-            {['all', ...cats].map((c) => <button key={c} onClick={() => setCat(c)} className={cn('press shrink-0 rounded-full border px-4 py-1.5 text-sm', cat === c ? 'bg-primary text-primary-foreground border-primary' : 'bg-card')} data-testid={`filter-help-${c}`}>{c === 'all' ? t('all') : c}</button>)}
+          <div className="flex w-full min-w-0 max-w-full flex-wrap items-center gap-2 mb-4" aria-label="Help categories">
+            {['all', ...cats].map((c) => <button key={c} onClick={() => setCat(c)} className={cn('press max-w-full rounded-full border px-4 py-1.5 text-sm', cat === c ? 'bg-primary text-primary-foreground border-primary' : 'bg-card')} data-testid={`filter-help-${c}`}>{c === 'all' ? t('all') : c}</button>)}
           </div>
           {shown.length ? <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] sm:grid-cols-[repeat(2,minmax(0,1fr))] gap-3">{shown.map((a) => (
             <Link key={String(a.id)} href={`/help/article/${a.slug}`} className="press min-w-0 [overflow-wrap:anywhere] rounded-3xl border bg-card p-5 hover:border-primary/50 block" data-testid={`card-article-${a.slug}`}>
