@@ -65,7 +65,7 @@ export function AdminContent() {
   );
 }
 
-const VARS = ['{{site_name}}', '{{username}}', '{{amount}}', '{{currency}}', '{{link}}', '{{code}}', '{{txid}}', '{{reason}}'];
+const VARS = ['{{site_name}}', '{{username}}', '{{title}}', '{{body}}', '{{amount}}', '{{currency}}', '{{link}}', '{{code}}', '{{txid}}', '{{reason}}', '{{logo_url}}', '{{support_email}}', '{{site_url}}', '{{year}}'];
 
 export function AdminEmails() {
   const { state } = useAdmin();
@@ -73,6 +73,8 @@ export function AdminEmails() {
   const { run, pending } = useRun('admin');
   const temps = list(state.emailTemplates);
   const keys = useMemo(() => Array.from(new Set(temps.map((t) => String(t.key)))), [temps]);
+  const settings = (state.settings as R) || {};
+  const smtp = (settings.smtp as R) || {};
   const [key, setKey] = useState('');
   const [lang, setLang] = useState('en');
   const [f, setF] = useState({ subject: '', body_html: '' });
@@ -80,7 +82,27 @@ export function AdminEmails() {
   const k = key || keys[0] || '';
   const t = temps.find((x) => x.key === k && (x.language || 'en') === lang);
   useEffect(() => setF({ subject: String(t?.subject || ''), body_html: String(t?.body_html || '') }), [k, lang, t?.subject, t?.body_html]);
-  const preview = f.body_html.replace(/{{\s*site_name\s*}}/g, brand.name).replace(/{{\s*username\s*}}/g, 'Amara').replace(/{{\s*amount\s*}}/g, '125.40').replace(/{{\s*currency\s*}}/g, 'USDT');
+  const safeText = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+  const configuredUrl = String(smtp.public_url || (typeof window !== 'undefined' ? window.location.origin : ''));
+  const baseUrl = /^https:\/\//i.test(configuredUrl) ? configuredUrl.replace(/\/$/, '') : '';
+  const configuredLogo = String(smtp.email_logo_url || '');
+  const logoUrl = /^https:\/\//i.test(configuredLogo) ? configuredLogo : baseUrl ? `${baseUrl}/icon-192.png` : '/icon-192.png';
+  const supportEmail = String(settings.support_email || '');
+  const previewValues: R = {
+    site_name: brand.name, username: 'Amara', title: 'Your account update',
+    body: 'This is a preview of the branded email template and its account details.',
+    amount: '125.40', currency: 'USDT', link: baseUrl ? `${baseUrl}/account` : '#',
+    code: '123456', txid: '0x1234…', reason: 'Preview only',
+    logo_url: logoUrl, support_email: supportEmail, site_url: baseUrl,
+    year: String(new Date().getFullYear()),
+  };
+  const previewBody = f.body_html.replace(/{{\s*([\w]+)\s*}}/g, (_match, token: string) => safeText(previewValues[token]));
+  const previewSubject = f.subject.replace(/{{\s*([\w]+)\s*}}/g, (_match, token: string) => String(previewValues[token] ?? ''));
+  const accent = /^#[\da-f]{6}$/i.test(String(settings.brand_color || '')) ? String(settings.brand_color) : '#14b8a6';
+  const supportFooter = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(supportEmail)
+    ? `Contact <a href="mailto:${safeText(supportEmail)}" style="color:#0f766e">${safeText(supportEmail)}</a>.`
+    : 'Reply to this email for help.';
+  const preview = `<!doctype html><html><body style="margin:0;padding:20px;background:#f1f5f9;font-family:Arial,sans-serif;color:#152238"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;margin:auto;background:#fff;border:1px solid #dbe4ee;border-radius:16px;overflow:hidden"><tr><td style="padding:20px 26px;background:#0b1a2e"><img src="${safeText(logoUrl)}" alt="${safeText(brand.name)}" width="44" height="44" style="vertical-align:middle;border-radius:10px"><span style="padding-left:12px;color:#fff;font-size:19px;font-weight:bold">${safeText(brand.name)}</span></td></tr><tr><td style="padding:28px;font-size:14px;line-height:1.7">${previewBody}<p><a href="${safeText(previewValues.link)}" style="display:inline-block;padding:12px 20px;background:${accent};border-radius:8px;color:#06101d;text-decoration:none;font-weight:bold">Open your account</a></p></td></tr><tr><td style="padding:18px 26px;background:#f8fafc;border-top:1px solid #e2e8f0;color:#64748b;font-size:12px">${supportFooter}<p>© ${previewValues.year} ${safeText(brand.name)}. This is an operational message from ${safeText(brand.name)}.</p></td></tr></table></body></html>`;
 
   return (
     <div>
@@ -100,7 +122,7 @@ export function AdminEmails() {
                 <Button className="rounded-full" disabled={pending || !k} onClick={() => run('email-template-save', { key: k, language: lang, subject: f.subject, body_html: f.body_html }, { success: 'Template saved' })} data-testid="button-save-template"><Save className="w-4 h-4 me-1.5" />Save</Button>
               </div>
             </Section>
-            <Section title="Live preview"><div className="rounded-2xl overflow-hidden border bg-[#f4f7fa]"><div className="h-2 brand-grad" /><div className="p-4 text-[#0B1A2E] text-sm"><div className="font-semibold mb-2">{f.subject.replace(/{{\s*site_name\s*}}/g, brand.name)}</div><iframe title="Email template preview" sandbox="" srcDoc={preview} className="w-full min-h-64 bg-white rounded-lg" /></div><div className="text-[11px] text-center text-[#5b6b7d] pb-3">© {brand.name}</div></div></Section>
+            <Section title="Branded email preview"><div className="rounded-2xl overflow-hidden border bg-[#f4f7fa]"><div className="p-4 text-[#0B1A2E] text-sm"><div className="font-semibold mb-2">{previewSubject}</div><iframe title="Email template preview" sandbox="" srcDoc={preview} className="w-full min-h-80 bg-white rounded-lg" /></div></div></Section>
           </div>
         </TabsContent>
         <TabsContent value="log">

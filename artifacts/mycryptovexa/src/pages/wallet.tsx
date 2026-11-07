@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearch, useLocation } from 'wouter';
 import { useTranslation } from 'react-i18next';
 import { QRCodeSVG } from 'qrcode.react';
-import { Wallet as WalletIcon, ArrowDownToLine, ArrowUpFromLine, Copy, Check, Download, AlertTriangle, BookUser, Trash2, Plus, ShieldOff, MessageSquareReply } from 'lucide-react';
+import { Wallet as WalletIcon, ArrowDownToLine, ArrowUpFromLine, Copy, Check, Download, AlertTriangle, BookUser, Trash2, Plus, ShieldOff, MessageSquareReply, LoaderCircle } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,46 +49,72 @@ function Tracker({ steps, at, failed }: { steps: string[]; at: number; failed?: 
 function DepositSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { state, settings } = usePlatform();
   const { run, pending } = useRun('user');
+  const runRef = useRef(run);
+  runRef.current = run;
   const currencies = list(state.currencies).filter((c) => c.enabled !== false);
   const [coin, setCoin] = useState('');
   const [net, setNet] = useState('');
   const [step, setStep] = useState<'address' | 'claim'>('address');
   const [copied, setCopied] = useState(false);
-  const [f, setF] = useState({ amount: '', txid: '', proof: '', terms: false });
-  useEffect(() => { if (!open) { setStep('address'); setF({ amount: '', txid: '', proof: '', terms: false }); } }, [open]);
+  const [tagCopied, setTagCopied] = useState(false);
+  const [f, setF] = useState({ amount: '', txid: '', proof: '', terms: false, memo_confirmed: false });
+  const [addressResponses, setAddressResponses] = useState<Record<string, R>>({});
+  const [addressLoading, setAddressLoading] = useState(false);
+  const autoDeposits = (settings.binance as R)?.auto_deposits !== false;
+  useEffect(() => { if (!open) { setStep('address'); setF({ amount: '', txid: '', proof: '', terms: false, memo_confirmed: false }); } }, [open]);
   const cur = currencies.find((c) => c.code === coin);
   const network = list(cur?.networks).find((n) => n.name === net);
   const addrs = network ? [String(network.address || ''), ...(Array.isArray(network.fallback_addresses) ? network.fallback_addresses.map(String) : [])].filter(Boolean) : [];
   const [addrIdx, setAddrIdx] = useState(0);
-  useEffect(() => setAddrIdx(0), [coin, net]);
-  const depAddr = addrs[addrIdx] || addrs[0] || '';
-  const txidRequired = !!(settings.security as R)?.deposit_txid_required || !!(settings.billing as R)?.deposit_txid_required;
+  const addressKey = `${coin}:${net}`;
+  const addressResponse = autoDeposits ? addressResponses[addressKey] : undefined;
+  useEffect(() => {
+    if (!open || !autoDeposits || !coin || !net || addressResponses[addressKey]) return;
+    let active = true;
+    setAddressLoading(true);
+    void runRef.current('deposit-address', { currency: coin, network: net }, { success: false })
+      .then((result) => {
+        if (active) setAddressResponses((old) => ({ ...old, [addressKey]: result ?? { available: false, message: 'Could not load a deposit address. Try again or contact support.' } }));
+      })
+      .finally(() => { if (active) setAddressLoading(false); });
+    return () => { active = false; };
+  }, [open, autoDeposits, coin, net, addressKey, addressResponses]);
+  useEffect(() => { setAddrIdx(0); setF((old) => ({ ...old, memo_confirmed: false })); }, [coin, net]);
+  const depAddr = autoDeposits ? String(addressResponse?.address || '') : addrs[addrIdx] || addrs[0] || '';
+  const depositTag = autoDeposits ? String(addressResponse?.tag || '') : String(network?.memo || '');
+  const memoRequired = !!network?.memo_required || !!depositTag;
+  const txidRequired = autoDeposits || settings.txid_required !== false;
   const terms = typeof settings.deposit_terms === 'string' ? settings.deposit_terms : (settings.deposit_terms as R)?.body || (settings.terms as R)?.deposit;
   const below = D(f.amount).gt(0) && D(f.amount).lt(D(cur?.min_deposit));
 
   return (
-    <ActionSheet open={open} onOpenChange={onOpenChange} title="Deposit" description="Send funds to the address below, then tell us. A person reviews every deposit before it is credited.">
+    <ActionSheet open={open} onOpenChange={onOpenChange} title="Deposit" description={autoDeposits ? "Send only on the selected network, then submit the exact transaction ID. Binance credits only an exact successful match; anything unverified stays in manual review." : "Send funds to the configured address, then submit the transaction details. An administrator reviews deposits before crediting."}>
       {step === 'address' ? (
         <div className="space-y-5">
           <CoinNet currencies={currencies} coin={coin} setCoin={setCoin} net={net} setNet={setNet} />
           {network ? (
             depAddr ? (
               <div className="rounded-3xl border p-5 space-y-4 rise">
+                {autoDeposits && addressResponse?.source !== 'binance' && <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-3 text-xs" role="status">{String(addressResponse?.message || 'This address requires manual administrator review.')}</div>}
+                {autoDeposits && addressResponse?.source === 'binance' && <div className="rounded-2xl bg-primary/5 border border-primary/20 p-3 text-xs" role="status">Shared Binance deposit address. Submit your exact TXID after sending; only the matching user, amount, network, address, and tag are eligible for automatic credit.</div>}
                 <div className="mx-auto w-fit p-3 rounded-2xl bg-[#f4f7fa]"><QRCodeSVG value={depAddr} size={168} fgColor="#0B1A2E" bgColor="#f4f7fa" /></div>
-                {addrs.length > 1 && <div className="flex flex-wrap gap-1.5" data-testid="group-deposit-address">{addrs.map((_, i) => <button key={i} type="button" onClick={() => setAddrIdx(i)} className={`rounded-full px-3 py-1 text-xs border ${i === addrIdx ? 'bg-primary text-primary-foreground border-primary' : 'text-muted-foreground'}`} data-testid={`button-deposit-address-${i}`}>{i === 0 ? 'Primary' : `Fallback ${i}`}</button>)}</div>}
+                {!autoDeposits && addrs.length > 1 && <div className="flex flex-wrap gap-1.5" data-testid="group-deposit-address">{addrs.map((_, i) => <button key={i} type="button" onClick={() => setAddrIdx(i)} className={`rounded-full px-3 py-1 text-xs border ${i === addrIdx ? 'bg-primary text-primary-foreground border-primary' : 'text-muted-foreground'}`} data-testid={`button-deposit-address-${i}`}>{i === 0 ? 'Primary' : `Fallback ${i}`}</button>)}</div>}
                 <div>
-                  <Label className="text-xs text-muted-foreground">{coin} address on {net}</Label>
+                  <Label className="text-xs text-muted-foreground">{addressResponse?.source === 'binance' ? 'Binance deposit address' : `${coin} address on ${net}`}</Label>
                   <div className="mt-1 flex items-center gap-2 rounded-2xl bg-muted p-3">
                     <code className="text-xs break-all flex-1" data-testid="text-deposit-address">{depAddr}</code>
                     <Button size="icon" variant="ghost" className="rounded-full shrink-0" onClick={() => { navigator.clipboard.writeText(depAddr); setCopied(true); setTimeout(() => setCopied(false), 1600); }} data-testid="button-copy-address">{copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}</Button>
                   </div>
-                  {network.memo && <p className="text-xs mt-2">Memo / tag: <code className="font-semibold">{network.memo}</code></p>}
-                  {network.memo_required && <p className="text-xs mt-1 text-destructive font-medium" data-testid="text-memo-required">This network requires the memo / tag. Deposits without it cannot be matched to your account.</p>}
+                  <p className="text-[11px] mt-2 text-muted-foreground">The QR contains the address only. Copy and include any memo/tag separately.</p>
+                  {depositTag && <div className="mt-2 flex items-center gap-2 text-xs"><span>Memo / tag: <code className="font-semibold break-all">{depositTag}</code></span><Button size="icon" variant="ghost" className="h-7 w-7 rounded-full shrink-0" onClick={() => { navigator.clipboard.writeText(depositTag); setTagCopied(true); setTimeout(() => setTagCopied(false), 1600); }} aria-label="Copy memo or tag">{tagCopied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}</Button></div>}
+                  {memoRequired && <p className="text-xs mt-1 text-destructive font-medium" data-testid="text-memo-required">Include the displayed memo/tag with your transfer and confirm below.</p>}
                 </div>
                 <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-3 text-xs flex gap-2"><AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />Send only {coin} on {net}. Minimum {amount(cur?.min_deposit)} {coin}. Funds sent on another network may be lost permanently.</div>
-                <Button className="w-full rounded-full h-12" onClick={() => setStep('claim')} data-testid="button-completed-deposit">I have completed deposit</Button>
+                {memoRequired && <label className="flex items-start gap-3 text-xs"><Checkbox checked={f.memo_confirmed} onCheckedChange={(v) => setF({ ...f, memo_confirmed: v === true })} data-testid="checkbox-memo-confirmed" />I included the displayed memo/tag.</label>}
+                <Button className="w-full rounded-full h-12" disabled={memoRequired && !f.memo_confirmed} onClick={() => setStep('claim')} data-testid="button-completed-deposit">I have completed deposit</Button>
               </div>
-            ) : <EmptyState icon={AlertTriangle} title="No address configured" body={`Deposits for ${coin} on ${net} are not open yet.`} />
+            ) : addressLoading ? <div className="rounded-3xl border p-6 flex items-center justify-center gap-2 text-sm text-muted-foreground" role="status"><LoaderCircle className="w-4 h-4 animate-spin" />Loading deposit address…</div>
+              : <div className="rounded-3xl border p-5 text-center space-y-3"><AlertTriangle className="w-6 h-6 text-amber-500 mx-auto" /><p className="font-semibold">No deposit address available</p><p className="text-sm text-muted-foreground">{String(addressResponse?.message || `Deposits for ${coin} on ${net} are not available yet.`)}</p>{autoDeposits && <Button variant="outline" className="rounded-full" onClick={() => setAddressResponses((old) => { const next = { ...old }; delete next[addressKey]; return next; })} data-testid="button-retry-deposit-address">Try again</Button>}</div>
           ) : <p className="text-sm text-muted-foreground">Choose a coin and network to reveal the deposit address.</p>}
         </div>
       ) : (
@@ -98,11 +124,11 @@ function DepositSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
           <div><Label>Transaction ID {txidRequired ? '' : '(optional)'}</Label><Input value={f.txid} onChange={(e) => setF({ ...f, txid: e.target.value.trim() })} className="mt-1 h-12 rounded-2xl font-mono text-xs" data-testid="input-deposit-txid" /></div>
           <div><Label>Screenshot (optional)</Label><div className="mt-1"><FilePick value={f.proof} onChange={(p) => setF({ ...f, proof: p })} accept="image/*" label="Add proof screenshot" testId="input-deposit-proof" /></div></div>
           {terms && <div className="rounded-2xl bg-muted p-3 text-xs max-h-32 overflow-y-auto whitespace-pre-line">{String(terms)}</div>}
-          <label className="flex items-start gap-3 text-sm"><Checkbox checked={f.terms} onCheckedChange={(v) => setF({ ...f, terms: v === true })} data-testid="checkbox-deposit-terms" />I confirm I sent this deposit and accept the deposit terms. Credit happens only after manual review.</label>
+          <label className="flex items-start gap-3 text-sm"><Checkbox checked={f.terms} onCheckedChange={(v) => setF({ ...f, terms: v === true })} data-testid="checkbox-deposit-terms" />I confirm I sent this deposit and accept the deposit terms. Credit happens only after Binance verifies it or an administrator reviews it.</label>
           <div className="flex gap-2">
             <Button variant="outline" className="rounded-full h-12" onClick={() => setStep('address')}>Back</Button>
-            <Button className="flex-1 rounded-full h-12" disabled={pending || !f.terms || D(f.amount).lte(0) || below || (txidRequired && !f.txid)} data-testid="button-submit-deposit"
-              onClick={() => run('deposit', { currency: coin, network: net, address_used: depAddr, amount: f.amount, txid: f.txid || undefined, terms: true, proof_image: f.proof || undefined }, { success: 'Deposit submitted for review', onSuccess: () => onOpenChange(false) })}>Submit for review</Button>
+            <Button className="flex-1 rounded-full h-12" disabled={pending || !f.terms || (memoRequired && !f.memo_confirmed) || D(f.amount).lte(0) || below || (txidRequired && !f.txid)} data-testid="button-submit-deposit"
+              onClick={() => run('deposit', { currency: coin, network: net, address_used: depAddr, amount: f.amount, txid: f.txid || undefined, terms: true, memo_confirmed: f.memo_confirmed, proof_image: f.proof || undefined }, { success: addressResponse?.source === 'binance' ? 'Deposit submitted for Binance verification' : 'Deposit submitted for review', onSuccess: () => onOpenChange(false) })}>{addressResponse?.source === 'binance' ? 'Submit for Binance check' : 'Submit for review'}</Button>
           </div>
         </div>
       )}

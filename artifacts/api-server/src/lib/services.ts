@@ -1,6 +1,6 @@
 import nodemailer from "nodemailer";
-import { createHmac } from "node:crypto";
-import { q, config, transaction, move, event, record, uid, assert, getRecords } from "./platform";
+import { createHash, createHmac } from "node:crypto";
+import { q, config, transaction, move, event, record, uid, assert, getRecords, defaultEmailTemplateBody } from "./platform";
 import { billRentals } from "./rentals";
 import { logger } from "./logger";
 
@@ -28,20 +28,188 @@ export async function binance(path:string,params:Record<string,string>={},method
   assert(r.ok,`Binance rejected the request (${r.status}). Review IP restrictions, permissions and account status.`,503);
   return body;
 }
+const binanceNetworkAliases:Record<string,string>={TRC20:"TRX",ERC20:"ETH",BEP20:"BSC",BEP2:"BNB",BITCOIN:"BTC",BTC:"BTC",ETH:"ETH",BSC:"BSC",TRX:"TRX"};
+const binanceAddressInFlight=new Map<string,Promise<any|null>>();
+export function binanceNetworkCode(network:any):string{
+  const explicit=String(network?.binance_network??"").trim();
+  if(explicit)return explicit;
+  const name=String(network?.name??"").trim();
+  return binanceNetworkAliases[name.toUpperCase().replace(/[\s_-]/g,"")]??name;
+}
+const accountFingerprint=(apiKey:string)=>createHash("sha256").update(apiKey).digest("hex").slice(0,24);
+const depositAddressRecordId=(currency:string,network:string,fingerprint:string)=>`binance-deposit-address:${currency.toUpperCase()}:${encodeURIComponent(network)}:${fingerprint}`;
+
+export async function getCachedBinanceDepositAddress(currency:string,network:any,c:any=undefined){
+  const cfg=await config(true,c);
+  const networkCode=binanceNetworkCode(network);
+  if(!networkCode)return null;
+  const hasCredentials=!!(cfg.binance_api_key&&cfg.binance_api_secret);
+  const fingerprint=hasCredentials?accountFingerprint(cfg.binance_api_key):"";
+  let row:any;
+  if(hasCredentials){
+    const id=depositAddressRecordId(currency,networkCode,fingerprint);
+    [row]=await q("SELECT data FROM platform_records WHERE id=$1 AND kind='binance_deposit_address'",[id],c);
+  }
+  if(!row){
+    [row]=await q("SELECT data FROM platform_records WHERE kind='binance_deposit_address' AND data->>'currency'=$1 AND data->>'app_network'=$2 ORDER BY created_at DESC LIMIT 1",[currency,String(network.name??"")],c);
+  }
+  if(!row?.data?.address)return null;
+  try{
+    if(network.address_regex&&!new RegExp(String(network.address_regex)).test(String(row.data.address)))return null;
+  }catch{return null;}
+  if(network.memo_required&&!String(row.data.tag??""))return null;
+  return {...row.data,current_account:hasCredentials&&row.data.account_fingerprint===fingerprint,current_network:row.data.network===networkCode};
+}
+
+/** Fetches/caches the pooled Binance address for one enabled app currency/network. */
+export async function getBinanceDepositAddress(currency:string,network:any){
+  const cfg=await config(true);
+  if(!cfg.binance_api_key||!cfg.binance_api_secret)return null;
+  const networkCode=binanceNetworkCode(network);
+  if(!networkCode)return null;
+  const fingerprint=accountFingerprint(cfg.binance_api_key);
+  const id=depositAddressRecordId(currency,networkCode,fingerprint);
+  const [cached]=await q("SELECT data FROM platform_records WHERE id=$1 AND kind='binance_deposit_address'",[id]);
+  if(cached?.data?.address&&cached.data.account_fingerprint===fingerprint&&Date.now()-Date.parse(String(cached.data.fetched_at||""))<86400000){
+    try{
+      if((!network.address_regex||new RegExp(String(network.address_regex)).test(String(cached.data.address)))&&(!network.memo_required||!!String(cached.data.tag??"")))return cached.data;
+    }catch{/* Invalid new network rules require a fresh, reviewed configuration. */}
+  }
+  const existing=binanceAddressInFlight.get(id);
+  if(existing)return existing;
+  const request=(async()=>{
+    try{
+      const response:any=await binance("/sapi/v1/capital/deposit/address",{coin:currency,network:networkCode});
+      const address=String(response?.address??"").trim();
+      const tag=String(response?.tag??response?.addressTag??"").trim();
+      assert(address.length>=10,"Binance did not return a usable deposit address",503);
+      if(network.address_regex)assert(new RegExp(String(network.address_regex)).test(address),"Binance returned an address that does not match this network's configured format",503);
+      if(network.memo_required)assert(!!tag,"Binance did not return the required memo or tag for this network",503);
+      const value={address,tag,currency:currency.toUpperCase(),app_network:String(network.name??""),network:networkCode,account_fingerprint:fingerprint,fetched_at:new Date().toISOString()};
+      await q("INSERT INTO platform_records(id,kind,user_id,data) VALUES($1,'binance_deposit_address',NULL,$2::jsonb) ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data",[id,JSON.stringify(value)]);
+      return value;
+    }catch{
+      logger.warn({currency,network:networkCode},"Binance deposit address unavailable; manual fallback may be used");
+      return null;
+    }
+  })();
+  binanceAddressInFlight.set(id,request);
+  try{return await request;}finally{if(binanceAddressInFlight.get(id)===request)binanceAddressInFlight.delete(id);}
+}
+
+function canonicalDecimal(value:unknown):string|null{
+  const raw=String(value??"").trim();
+  if(!/^\d+(?:\.\d+)?$/.test(raw))return null;
+  const [whole,decimal=""]=raw.split(".");
+  const normalizedWhole=whole.replace(/^0+(?=\d)/,"");
+  const normalizedDecimal=decimal.replace(/0+$/,"");
+  return normalizedDecimal?`${normalizedWhole}.${normalizedDecimal}`:normalizedWhole;
+}
+const normalizedTxid=(value:unknown)=>String(value??"").trim().toLowerCase().replace(/^0x/,"");
+
+/** Exact matching only; anything missing, ambiguous, pending, or mismatched stays in review. */
+export function findVerifiedBinanceDeposit(deposit:any,history:any[]):any|null{
+  const candidates=history.filter((item:any)=>
+    String(item?.coin??"").toUpperCase()===String(deposit.currency??"").toUpperCase()&&
+    normalizedTxid(item?.txId)===normalizedTxid(deposit.txid));
+  if(candidates.length!==1)return null;
+  const item=candidates[0],data=deposit.data??{};
+  const expectedTag=String(data.memo_used??"").trim();
+  if(Number(item.status)!==1||
+    String(item.network??"").toUpperCase()!==String(data.binance_network??"").toUpperCase()||
+    String(item.address??"")!==String(deposit.address_used??"")||
+    canonicalDecimal(item.amount)!==canonicalDecimal(deposit.amount_claimed)||
+    String(item.addressTag??item.tag??"").trim()!==expectedTag)return null;
+  return item;
+}
+export async function creditVerifiedBinanceDeposit(id:string,fingerprint:string,match:any,readCurrentConfig:(c:any)=>Promise<Record<string,any>>=(c)=>config(true,c)){
+  return transaction(async c=>{
+    await q("SELECT key FROM settings WHERE key=ANY($1::text[]) FOR SHARE",[["binance","binance_api_key","binance_api_secret"]],c);
+    const currentConfig=await readCurrentConfig(c);
+    if(currentConfig.binance?.auto_deposits===false||!currentConfig.binance_api_key||!currentConfig.binance_api_secret||accountFingerprint(currentConfig.binance_api_key)!==fingerprint){
+      return {alreadyCredited:false,deposit:null};
+    }
+    const [locked]=await q("SELECT * FROM deposits WHERE id=$1 FOR UPDATE",[id],c);
+    if(!locked||locked.status!=="pending_review"||locked.data?.binance_auto_eligible!==true||locked.data?.binance_account_fingerprint!==fingerprint){
+      return {alreadyCredited:locked?.status==="approved",deposit:locked??null};
+    }
+    const {approveDeposit}=await import("./deposits");
+    const result=await approveDeposit(c,id,null,String(match.amount),"Automatically verified by Binance deposit history");
+    if(!result.alreadyCredited){
+      await q("UPDATE deposits SET data=data||$1::jsonb WHERE id=$2",[
+        JSON.stringify({binance_verified_at:new Date().toISOString(),binance_verified_status:Number(match.status),binance_verified_amount:String(match.amount),binance_verified_network:String(match.network)}),id,
+      ],c);
+    }
+    return result;
+  });
+}
 export async function sendEmail(to:string,template:string,data:any) {
   const cfg=await config(true),smtp=cfg.smtp;
   assert(smtp?.host&&smtp?.from_email,"SMTP is not configured",503);
   const templates=await getRecords("email_template"),tmpl=templates.find(t=>t.key===template&&t.language===(data.language??"en"))??templates.find(t=>t.key===template&&t.language==="en");
-  const replace=(s:string)=>s.replace(/\{\{\s*([\w]+)\s*\}\}/g,(_,key)=>escapeHtml(key==="site_name"?cfg.site_name:data[key]??""));
-  const subject=replace(tmpl?.subject??data.title??cfg.site_name);
-  const link=data.token&&data.origin?`${String(data.origin).replace(/\/$/,"")}${data.path}?token=${encodeURIComponent(data.token)}`:null;
-  const content=(tmpl?replace(tmpl.body_html):`<h1 style="font-size:24px">${escapeHtml(data.title)}</h1><p style="line-height:1.7">${escapeHtml(data.body)}</p>`)+
-    (link?`<p><a href="${escapeHtml(link)}" style="background:#14b8a6;color:#06101d;padding:12px 20px;border-radius:10px;display:inline-block">Continue securely</a></p>`:"");
+  const rendered=renderEmailMessage(template,tmpl,data,cfg);
   const transport=nodemailer.createTransport({host:smtp.host,port:Number(smtp.port??587),secure:Number(smtp.port??587)===465,requireTLS:Number(smtp.port??587)!==465,
     ...(smtp.username?{auth:{user:smtp.username,pass:cfg.smtp_password}}:{}),connectionTimeout:15000,socketTimeout:20000});
-  const color=/^#[\da-f]{6}$/i.test(cfg.brand_color)?cfg.brand_color:"#14b8a6";
-  await transport.sendMail({from:{name:smtp.from_name||cfg.site_name,address:smtp.from_email},to,subject,html:
-    `<div style="background:#06101d;padding:36px 16px;font-family:Arial,sans-serif;color:#e8f0f7"><div style="max-width:560px;margin:auto;background:#0b1a2e;padding:32px;border-radius:20px;border-top:4px solid ${color}"><div style="color:${color};font-size:20px;font-weight:bold">${escapeHtml(cfg.site_name)}</div>${content}<hr style="border:0;border-top:1px solid #294153;margin-top:30px"><p style="font-size:12px;color:#8fa3b8">© ${new Date().getFullYear()} ${escapeHtml(cfg.site_name)}. Cryptocurrency involves risk. Returns are not guaranteed.</p></div></div>`});
+  await transport.sendMail({
+    from:{name:smtp.from_name||cfg.site_name,address:smtp.from_email},to,subject:rendered.subject,
+    ...(rendered.replyTo?{replyTo:rendered.replyTo}:{}),html:rendered.html,text:rendered.text,
+  });
+}
+function mailUrl(value:unknown,allowLocal=false):URL|null{
+  try{
+    const parsed=new URL(String(value??""));
+    const local=allowLocal&&parsed.protocol==="http:"&&["localhost","127.0.0.1","::1"].includes(parsed.hostname);
+    if((parsed.protocol!=="https:"&&!local)||parsed.username||parsed.password)return null;
+    return parsed;
+  }catch{return null;}
+}
+function mailOrigin(value:unknown,allowLocal=false):string{
+  const parsed=mailUrl(value,allowLocal);
+  return parsed&&parsed.pathname==="/"&&!parsed.search&&!parsed.hash?parsed.origin:"";
+}
+function plainText(html:string):string{
+  return html.replace(/<style[\s\S]*?<\/style>/gi,"").replace(/<br\s*\/?>/gi,"\n").replace(/<\/(p|h[1-6]|tr|li|td|div)>/gi,"\n")
+    .replace(/<[^>]*>/g," ").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&lt;/gi,"<")
+    .replace(/&gt;/gi,">").replace(/&quot;/gi,'"').replace(/&#39;|&#x27;/gi,"'").replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+}
+export function renderEmailMessage(templateKey:string,tmpl:any,data:any,cfg:any){
+  const smtp=cfg.smtp??{},development=process.env.NODE_ENV!=="production";
+  const appOrigin=mailOrigin(smtp.public_url) || mailOrigin(data.origin,development);
+  const linkOrigin=mailOrigin(data.origin,development) || mailOrigin(smtp.public_url);
+  let link="";
+  if(data.token&&data.path&&linkOrigin){
+    const path=String(data.path);
+    if(path.startsWith("/")&&!path.startsWith("//")){
+      const url=new URL(path,linkOrigin);url.searchParams.set("token",String(data.token));link=url.toString();
+    }
+  }else if(data.link){
+    const candidate=mailUrl(data.link,development);
+    if(candidate&&linkOrigin&&candidate.origin===linkOrigin)link=candidate.toString();
+  }
+  const supportEmail=/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(cfg.support_email??""))
+    ?String(cfg.support_email):/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(smtp.from_email??""))?String(smtp.from_email):"";
+  const emailLogo=mailUrl(smtp.email_logo_url) || mailUrl(/^https:\/\//i.test(String(cfg.logo??""))?cfg.logo:"") || null;
+  const relativeLogo="/icon-192.png";
+  const logoUrl=emailLogo?.toString() || (appOrigin?new URL(relativeLogo,appOrigin).toString():"");
+  const siteName=String(cfg.site_name??"MyCryptoVexa");
+  const siteUrl=appOrigin;
+  const values:Record<string,unknown>={...data,site_name:siteName,username:data.username||"there",logo_url:logoUrl,support_email:supportEmail,site_url:siteUrl,year:new Date().getFullYear(),link};
+  const replace=(source:string,escape:boolean)=>source.replace(/\{\{\s*([\w]+)\s*\}\}/g,(_,key)=>{const value=String(values[key]??"");return escape?escapeHtml(value):value.replace(/[\r\n]+/g," ");});
+  const subject=replace(String(tmpl?.subject??"{{title}} — {{site_name}}"),false).replace(/[\r\n]+/g," ").trim();
+  const body=replace(String(tmpl?.body_html??defaultEmailTemplateBody(templateKey)),true);
+  const color=/^#[\da-f]{6}$/i.test(String(cfg.brand_color??""))?String(cfg.brand_color):"#14b8a6";
+  const logo=logoUrl
+    ?`<img src="${escapeHtml(logoUrl)}" width="44" height="44" alt="${escapeHtml(siteName)} logo" style="display:block;width:44px;height:44px;border:0;border-radius:12px">`
+    :`<span style="display:inline-block;width:44px;height:44px;line-height:44px;text-align:center;background:${color};color:#06101d;font-weight:700;font-size:15px;border-radius:12px">MCV</span>`;
+  const ctaLabel=({verify_email:"Verify email",password_reset:"Reset password",withdrawal_confirmation:"Confirm withdrawal"} as Record<string,string>)[templateKey]??"Open your account";
+  const button=link?`<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 8px"><tr><td bgcolor="${color}" style="border-radius:8px"><a href="${escapeHtml(link)}" style="display:inline-block;padding:13px 22px;color:#06101d;text-decoration:none;font-weight:700;font-family:Arial,sans-serif">${ctaLabel}</a></td></tr></table><p style="font-size:12px;color:#64748b;line-height:1.6">If the button does not work, copy and paste this address into your browser:<br><a href="${escapeHtml(link)}" style="color:#0f766e;word-break:break-all">${escapeHtml(link)}</a></p>`:"";
+  const helpLine=supportEmail
+    ?`Contact <a href="mailto:${escapeHtml(supportEmail)}" style="color:#0f766e;text-decoration:underline">${escapeHtml(supportEmail)}</a>.`
+    :"Reply to this email for help.";
+  const website=siteUrl?`<a href="${escapeHtml(siteUrl)}" style="color:#0f766e;text-decoration:underline">${escapeHtml(siteUrl)}</a>`:"";
+  const html=`<!doctype html><html lang="${escapeHtml(String(data.language??"en"))}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(subject)}</title></head><body style="margin:0;padding:0;background:#f1f5f9;color:#152238;font-family:Arial,Helvetica,sans-serif"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f1f5f9" style="background:#f1f5f9;padding:28px 12px"><tr><td align="center"><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#ffffff;border:1px solid #dbe4ee;border-radius:16px;overflow:hidden"><tr><td bgcolor="#0b1a2e" style="padding:22px 28px;background:#0b1a2e"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td valign="middle">${logo}</td><td valign="middle" style="padding-left:12px;color:#ffffff;font-size:19px;font-weight:700">${escapeHtml(siteName)}</td></tr></table></td></tr><tr><td style="padding:32px 28px 30px;color:#152238;font-size:15px;line-height:1.7">${body}${button}</td></tr><tr><td bgcolor="#f8fafc" style="padding:20px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;color:#64748b;font-size:12px;line-height:1.7"><p style="margin:0 0 8px;color:#334155;font-weight:700">Need help?</p><p style="margin:0 0 12px">${helpLine}</p>${website?`<p style="margin:0 0 12px">${website}</p>`:""}<p style="margin:0">© ${new Date().getFullYear()} ${escapeHtml(siteName)}. This is an operational message from ${escapeHtml(siteName)}. If you did not request this email, contact support.</p></td></tr></table></td></tr></table></body></html>`;
+  const text=plainText(html);
+  return {subject,html,text,replyTo:supportEmail||String(smtp.from_email??"")};
 }
 /** Claim and deliver one item; injectable delivery/client allow rollback-isolated retry tests. */
 export async function deliverQueuedEmail(id:string,deliver=sendEmail,c?:any,now=new Date()) {
@@ -169,19 +337,35 @@ export async function reconcile(){
   }
   return {id,status:differences.length?"mismatch":"balanced",differences};
 }
-async function depositHints(){
+async function binanceDepositWorker(){
   const cfg=await config(true);
-  if(!cfg.binance?.deposit_hints||!cfg.binance_api_key)return;
-  const pending=await q("SELECT * FROM deposits WHERE status IN ('pending_review','needs_info') AND data->>'binance_hint_checked' IS NULL LIMIT 30");
+  if(cfg.binance?.auto_deposits===false||!cfg.binance_api_key||!cfg.binance_api_secret)return;
+  const fingerprint=accountFingerprint(cfg.binance_api_key);
+  const pending=await q("SELECT * FROM deposits WHERE status='pending_review' AND data->>'binance_auto_eligible'='true' AND (data->>'binance_next_check_at' IS NULL OR (data->>'binance_next_check_at')::timestamptz<=now()) ORDER BY created_at LIMIT 100");
   if(!pending.length)return;
+  let history:any[];
   try{
-    const history=await binance("/sapi/v1/capital/deposit/hisrec");
-    if(!Array.isArray(history))return;
-    for(const d of pending){
-      const match=history.find((h:any)=>h.coin===d.currency&&String(h.txId).toLowerCase().replace(/^0x/,"")===String(d.txid).toLowerCase().replace(/^0x/,""));
-      if(match)await q("UPDATE deposits SET data=data||$1::jsonb WHERE id=$2",[JSON.stringify({binance_hint_checked:new Date().toISOString(),binance_hint:{possible_match:true,txid:match.txId,status:match.status}}),d.id]);
+    const response=await binance("/sapi/v1/capital/deposit/hisrec");
+    if(!Array.isArray(response))return;
+    history=response;
+  }catch{logger.warn("Binance deposit history unavailable; deposits remain in manual review");return;}
+  for(const d of pending){
+    const data=d.data??{};
+    if(data.binance_account_fingerprint!==fingerprint)continue;
+    const match=findVerifiedBinanceDeposit(d,history);
+    if(!match){
+      const possible=history.find((item:any)=>String(item?.coin??"").toUpperCase()===String(d.currency??"").toUpperCase()&&normalizedTxid(item?.txId)===normalizedTxid(d.txid));
+      const attempts=Number(data.binance_check_attempts??0)+1;
+      const nextCheck=new Date(Date.now()+Math.min(30,2+attempts)*60000).toISOString();
+      await q("UPDATE deposits SET data=data||$1::jsonb WHERE id=$2 AND status='pending_review'",[JSON.stringify({
+        binance_hint_checked:new Date().toISOString(),
+        binance_hint:possible?{possible_match:true,status:String(possible.status??""),network:String(possible.network??"")}:{possible_match:false},
+        binance_check_attempts:attempts,binance_next_check_at:nextCheck,
+      }),d.id]);
+      continue;
     }
-  }catch{logger.warn("Binance deposit hints unavailable");}
+    await creditVerifiedBinanceDeposit(d.id,fingerprint,match);
+  }
 }
 async function scheduledRates(){
   const list=await q("SELECT * FROM assets WHERE data->'scheduled_changes' IS NOT NULL");
@@ -226,7 +410,7 @@ export function startWorkers(){
     if(running)return;running=true;
     try{
       const failures:string[]=[];
-      for(const [name,run] of Object.entries({rates:scheduledRates,billing:billRentals,confirmations:expireWithdrawalConfirmations,withdrawals:withdrawalWorker,deposit_hints:depositHints,email:emailWorker,telegram:telegramWorker})){
+      for(const [name,run] of Object.entries({rates:scheduledRates,billing:billRentals,confirmations:expireWithdrawalConfirmations,withdrawals:withdrawalWorker,binance_deposits:binanceDepositWorker,email:emailWorker,telegram:telegramWorker})){
         try{await run();}
         catch(err){
           failures.push(name);

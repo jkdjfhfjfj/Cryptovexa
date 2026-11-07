@@ -5,7 +5,7 @@ import { z } from "zod";
 import { q, uid, hash, config, requireUser, amount, str, assert, transaction, record, ownedRecord, getRecords, move, event, token, replayRequest } from "../lib/platform";
 import { startRental, stopRental, extendRental } from "../lib/rentals";
 import { checkTwofa } from "./accounts";
-import { marketRates } from "../lib/services";
+import { getBinanceDepositAddress, getCachedBinanceDepositAddress, marketRates } from "../lib/services";
 
 export const userActions: IRouter = Router();
 export async function currencyNetwork(currency: unknown,network: unknown,c?:any) {
@@ -26,6 +26,27 @@ userActions.post("/v1/actions/:action",async(req,res):Promise<void>=>{
   assert(!cfg.maintenance,"The platform is in maintenance mode. Please try again later.",503);
   if(cfg.email_verification_required&&["deposit","withdraw","rent"].includes(action))assert(u.email_verified,"Verify your email before making payments or rentals",403);
   if(cfg.twofa_mode==="required"&&["withdraw","rent"].includes(action))assert(u.twofa_enabled,"Enable two-factor authentication in your profile first",403);
+  if(action==="deposit-address"){
+    const {net}=await currencyNetwork(b.currency,b.network);
+    if(cfg.binance?.auto_deposits!==false){
+      const address=await getBinanceDepositAddress(String(b.currency),net);
+      if(address){
+        res.json({success:true,available:true,address:address.address,tag:address.tag,source:"binance",auto_eligible:true,memo_required:!!net.memo_required});
+        return;
+      }
+    }
+    const manualAddress=[net.address,...(net.fallback_addresses??[])].find((value:any)=>typeof value==="string"&&value.trim());
+    const manualAddressUsable=!!manualAddress&&(!net.memo_required||!!String(net.memo??"").trim());
+    res.json({
+      success:true,available:manualAddressUsable,address:manualAddressUsable?manualAddress:"",tag:manualAddressUsable?String(net.memo??""):"",
+      source:manualAddressUsable?(cfg.binance?.auto_deposits===false?"manual":"manual_fallback"):"unavailable",
+      auto_eligible:false,memo_required:!!net.memo_required,
+      message:manualAddressUsable
+        ?(cfg.binance?.auto_deposits===false?"This deposit will be reviewed manually.":"Binance could not provide an address; this manually configured address will be reviewed by an administrator.")
+        :manualAddress&&net.memo_required?"The manual fallback is missing its required memo/tag. Contact an administrator.":"No Binance or manual deposit address is currently available for this network.",
+    });
+    return;
+  }
   let result:any={success:true,message:"Saved"};
   await transaction(async c=>{
     const requestId=b.request_id?z.string().uuid().parse(b.request_id):null;
@@ -38,24 +59,37 @@ userActions.post("/v1/actions/:action",async(req,res):Promise<void>=>{
     if(action==="deposit"){
       assert(b.terms===true,"Accept the deposit terms");
       const {cur,net}=await currencyNetwork(b.currency,b.network,c),value=amount(b.amount);
-      const addresses=[net.address,...(net.fallback_addresses??[])].filter(Boolean);
+      const cachedBinanceAddress=await getCachedBinanceDepositAddress(String(b.currency),net,c);
+      const addresses=[net.address,...(net.fallback_addresses??[]),cachedBinanceAddress?.address].filter(Boolean);
       const addressUsed=b.address_used?str(b.address_used,10,256):net.address||addresses[0];
       assert(addressUsed&&addresses.includes(addressUsed),"No valid deposit address is configured for this network. Refresh the address or contact support.");
+      const usingBinanceAddress=!!cachedBinanceAddress&&addressUsed===cachedBinanceAddress.address;
+      const addressTag=usingBinanceAddress?String(cachedBinanceAddress.tag??""):String(net.memo??"");
+      assert(!(net.memo_required||addressTag)||b.memo_confirmed===true,"Confirm that you included the required memo or tag");
+      assert(!net.memo_required||!!addressTag,"This network's required memo or tag is not configured");
       const [{valid}]=await q("SELECT $1::numeric >= $2::numeric AS valid",[value,cur.min_deposit],c);
       assert(valid,`Minimum deposit is ${cur.min_deposit} ${b.currency}`);
       const rawTxid=b.txid?str(b.txid,5,256).trim():null;
       const txid=rawTxid&&/^(?:0x)?[a-f0-9]{64}$/i.test(rawTxid)?rawTxid.toLowerCase().replace(/^0x/,""):rawTxid;
       assert(!cfg.txid_required||txid,"Transaction ID is required");
+      if(cfg.binance?.auto_deposits!==false&&usingBinanceAddress)assert(!!txid,"A transaction ID is required for automatic Binance verification");
       if(txid){
         await q("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`deposit-txid:${txid}`],c);
         const duplicate=await q("SELECT id FROM deposits WHERE txid=$1 OR regexp_replace(lower(txid),'^0x','')=$1 LIMIT 1",[txid],c);
         assert(!duplicate.length,"This transaction ID has already been submitted",409);
       }
       const id=uid(),proof=await ownedFile(b.proof_image,u,c);
+      const autoEligible=cfg.binance?.auto_deposits!==false&&usingBinanceAddress&&cachedBinanceAddress.current_account===true&&cachedBinanceAddress.current_network===true&&!!txid&&(!net.memo_required||!!cachedBinanceAddress.tag);
       await q("INSERT INTO deposits(id,user_id,currency,network,address_used,amount_claimed,txid,proof_image,data) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
-        [id,u.id,b.currency,b.network,addressUsed,value,txid,proof,JSON.stringify({terms:cfg.deposit_terms,address_kind:addressUsed===net.address?"primary":"fallback",memo_used:net.memo??""})],c);
-      await event(u.id,"Deposit submitted","Your deposit is awaiting manual review. Funds are not yet credited.","deposit_submitted",c);
-      result={...result,id,message:"Deposit submitted for review"};
+        [id,u.id,b.currency,b.network,addressUsed,value,txid,proof,JSON.stringify({
+          terms:cfg.deposit_terms,address_kind:autoEligible?"binance":addressUsed===net.address?"primary":"fallback",
+          memo_used:addressTag,binance_auto_eligible:autoEligible,
+          ...(autoEligible?{binance_network:cachedBinanceAddress.network,binance_account_fingerprint:cachedBinanceAddress.account_fingerprint}:{}),
+        })],c);
+      await event(u.id,"Deposit submitted",autoEligible
+        ?"Binance is checking your transaction. The deposit will be credited only after an exact confirmed match; anything unverified remains in manual review."
+        :"Your deposit is awaiting manual review. Funds are not yet credited.","deposit_submitted",c);
+      result={...result,id,message:autoEligible?"Deposit submitted for Binance verification":"Deposit submitted for manual review"};
     }else if(action==="deposit-reply"){
       const [d]=await q("SELECT * FROM deposits WHERE id=$1 AND user_id=$2 FOR UPDATE",[str(b.id),u.id],c);
       assert(d&&d.status==="needs_info","This deposit is not awaiting more information");

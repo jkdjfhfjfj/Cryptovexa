@@ -30,6 +30,21 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
     await audit(u,action,null,req);
     res.json({...result,message:"Binance connection verified"});return;
   }
+  if(action==="binance-network-list"){
+    const currency=z.enum(["BNB","USDT","USDC","BTC","ETH"]).parse(b.currency);
+    const catalog=await binance("/sapi/v1/capital/config/getall");
+    assert(Array.isArray(catalog),"Binance returned an invalid currency/network list",503);
+    const asset=catalog.find((entry:any)=>String(entry.coin??"").toUpperCase()===currency);
+    const networks=(asset?.networkList??[]).filter((network:any)=>network.depositEnable===true&&String(network.network??"").trim()).map((network:any)=>({
+      name:String(network.name||network.network).slice(0,50),
+      binance_network:String(network.network).slice(0,50),
+      address_regex:String(network.addressRegex??"").slice(0,256),
+      memo_required:!!String(network.memoRegex??"").trim(),
+      confirmations:String(network.minConfirm??""),
+    }));
+    await audit(u,"binance_network_list",currency,req,{count:networks.length});
+    res.json({...result,currency,networks,message:`Loaded ${networks.length} Binance deposit networks. New networks remain disabled until reviewed.`});return;
+  }
   if(action==="email-test"){
     if(b.resend_log_id){
       const [old]=await q("UPDATE email_logs SET status='queued',attempts=0,error=NULL,data=data-'next_attempt_at'-'delivery_started_at' WHERE id=$1 RETURNING id",[str(b.resend_log_id)]);
@@ -58,6 +73,7 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
       const section=str(b.section,1,100),v=z.record(z.unknown()).parse(b.values) as any;
       const allowedSections=["general","branding","security","billing","withdrawal_rules","withdrawal","referral","referral_config","notifications","smtp","binance","translations","terms"];
       assert(allowedSections.includes(section),"Unknown settings section");
+      if(section==="binance"&&v.auto_deposits!==undefined)assert(typeof v.auto_deposits==="boolean","Automatic deposit setting must be on or off");
       const secretFields:Record<string,string>={api_key:"binance_api_key",api_secret:"binance_api_secret",password:"smtp_password",captcha_secret:"captcha_secret",telegram_bot_token:"telegram_bot_token"};
       for(const [field,key] of Object.entries(secretFields)){
         if(v[field])await putSetting(key,str(v[field],1,4000),true,c);
@@ -96,6 +112,20 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
       if(section==="smtp"&&v.host){
         // Prevent mail testing from probing local infrastructure.
         assert(!/^(localhost|127\.|10\.|192\.168\.|169\.254\.|0\.|\[?::1)/i.test(v.host),"Use a public SMTP hostname");
+      }
+      if(section==="smtp"){
+        if(v.from_email)v.from_email=z.string().email().parse(v.from_email);
+        if(v.port!==undefined)v.port=z.coerce.number().int().min(1).max(65535).parse(v.port);
+        if(v.public_url){
+          let url:URL|null=null;try{url=new URL(String(v.public_url));}catch{assert(false,"Public app URL must be a valid HTTPS URL");}
+          assert(!!url&&url.protocol==="https:"&&!url.username&&!url.password&&url.pathname==="/"&&!url.search&&!url.hash,"Public app URL must be an HTTPS origin without a path");
+          v.public_url=url.origin;
+        }
+        if(v.email_logo_url){
+          let url:URL|null=null;try{url=new URL(String(v.email_logo_url));}catch{assert(false,"Email logo URL must be a valid HTTPS URL");}
+          assert(!!url&&url.protocol==="https:"&&!url.username&&!url.password,"Email logo must be a publicly accessible HTTPS image");
+          v.email_logo_url=url.toString();
+        }
       }
       if(section==="general"||section==="branding"||section==="security"||section==="terms"){
         const allowed=["site_name","short_name","brand_color","logo","favicon","app_icon","maintenance","registration_mode","twofa_mode","admin_twofa_mode","api_keys_enabled","email_verification_required","txid_required","deposit_terms","withdrawal_terms","force_manual","support_email","captcha_enabled","captcha_site_key","login_lockout_attempts"];
@@ -289,7 +319,7 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
     }else if(action==="currency-save"){
       const code=z.enum(["BNB","USDT","USDC","BTC","ETH"]).parse(b.code);
       const prev=await ownedRecord(`currency-${code}`,"currency",undefined,c);
-      const networks=z.array(z.object({name:z.string().min(1).max(50),enabled:z.boolean(),address:z.string().max(256),memo:z.string().max(100).optional(),memo_required:z.boolean().optional(),fallback_addresses:z.array(z.string().min(10).max(256)).max(10).optional(),address_regex:z.string().max(256).optional()}).passthrough()).max(20).parse(b.networks??prev.networks);
+      const networks=z.array(z.object({name:z.string().min(1).max(50),enabled:z.boolean(),address:z.string().max(256),binance_network:z.string().trim().max(50).optional(),memo:z.string().max(100).optional(),memo_required:z.boolean().optional(),fallback_addresses:z.array(z.string().min(10).max(256)).max(10).optional(),address_regex:z.string().max(256).optional()}).passthrough()).max(100).parse(b.networks??prev.networks);
       assert(new Set(networks.map(n=>n.name)).size===networks.length,"Network names must be unique per currency");
       for(const n of networks){
         if(n.address_regex){

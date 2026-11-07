@@ -1,10 +1,11 @@
 import test from "node:test";
 import strict from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { pool } from "@workspace/db";
-import { q, uid, move, amount, encrypt, decrypt, putSetting, config, record, transaction, replayRequest, accountAllowedInEnvironment } from "../lib/platform";
+import { q, uid, move, amount, encrypt, decrypt, putSetting, config, record, transaction, replayRequest, accountAllowedInEnvironment, defaultSettings, defaultEmailTemplateBody } from "../lib/platform";
 import { startRental, stopRental, billRental } from "../lib/rentals";
 import { approveDeposit } from "../lib/deposits";
-import { referralCommission, settleWithdrawal, deliverQueuedEmail } from "../lib/services";
+import { referralCommission, settleWithdrawal, deliverQueuedEmail, findVerifiedBinanceDeposit, creditVerifiedBinanceDeposit, binanceNetworkCode, renderEmailMessage } from "../lib/services";
 import { reviewDocuments } from "../lib/verification";
 
 strict.notEqual(process.env.NODE_ENV,"production","Financial fixtures must never run against a production runtime");
@@ -28,6 +29,27 @@ test("Default preview accounts cannot authenticate in production",()=>{
 test("Money validation rejects floats, exponents, negatives and zero",()=>{
   for(const n of [0.1,1,"1e3","-1","0","0.000","NaN","1.1234567890123456789"])strict.throws(()=>amount(n));
   strict.equal(amount("0.000000000000000001"),"0.000000000000000001");
+});
+test("Binance deposit matching requires one exact successful asset, network, address, tag and amount",()=>{
+  strict.equal(defaultSettings.binance.auto_deposits,true,"Binance automatic deposits are the default mode");
+  strict.equal(binanceNetworkCode({name:"TRC20"}),"TRX");
+  strict.equal(binanceNetworkCode({name:"ERC20"}),"ETH");
+  strict.equal(binanceNetworkCode({name:"BEP20"}),"BSC");
+  strict.equal(binanceNetworkCode({name:"Custom chain",binance_network:"CHAIN-X"}),"CHAIN-X");
+  const deposit={currency:"USDT",txid:"0xABCDEF",address_used:"TExampleDepositAddress123456",amount_claimed:"12.5000",data:{binance_network:"TRX",memo_used:"memo-7"}};
+  const success={coin:"USDT",txId:"abcdef",network:"TRX",address:"TExampleDepositAddress123456",addressTag:"memo-7",amount:"12.5",status:1};
+  strict.equal(findVerifiedBinanceDeposit(deposit,[success]),success);
+  for(const mismatch of [
+    {...success,status:0},
+    {...success,status:6},
+    {...success,coin:"USDC"},
+    {...success,network:"ETH"},
+    {...success,address:"TAnotherDepositAddress123456"},
+    {...success,addressTag:"other-memo"},
+    {...success,amount:"12.5001"},
+    {...success,txId:"different"},
+  ])strict.equal(findVerifiedBinanceDeposit(deposit,[mismatch]),null);
+  strict.equal(findVerifiedBinanceDeposit(deposit,[success,{...success,network:"ETH"}]),null,"ambiguous repeated transaction rows stay manual");
 });
 async function rentalFixture(c:any,u:any,mode="minute",duration=3,autoRenew=false){
   await move(c,u.id,"USDT","100","test_funding","funding",`fund:${u.id}`);
@@ -112,6 +134,54 @@ test("The actual deposit-review service credits an adjusted amount exactly once"
     const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id],c);strict.equal(w.balance,"10.300000000000000000");
     const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1",[id],c);strict.equal(n,1);
   });
+});
+test("A Binance-verified credit uses the exact provider amount and remains idempotent",async()=>{
+  await sandbox(async(c,u)=>{
+    const id=uid(),historyItem={coin:"USDT",txId:"deposit-hash",network:"TRX",address:"TExampleDepositAddress123456",addressTag:"",amount:"0.300",status:1};
+    await q("INSERT INTO deposits(id,user_id,currency,network,address_used,amount_claimed,txid,data) VALUES($1,$2,'USDT','TRC20',$3,'0.300','deposit-hash',$4::jsonb)",
+      [id,u.id,historyItem.address,JSON.stringify({binance_auto_eligible:true,binance_network:"TRX",memo_used:""})],c);
+    const [deposit]=await q("SELECT * FROM deposits WHERE id=$1",[id],c);
+    const verified=findVerifiedBinanceDeposit(deposit,[historyItem]);
+    strict.ok(verified);
+    const first=await approveDeposit(c,id,null,String(verified.amount),"Automatically verified by Binance deposit history");
+    const replay=await approveDeposit(c,id,null,"99","Repeated Binance worker pass");
+    strict.equal(first.alreadyCredited,false);strict.equal(replay.alreadyCredited,true);
+    const [saved]=await q("SELECT status,amount_credited,reviewed_by FROM deposits WHERE id=$1",[id],c);
+    strict.equal(saved.status,"approved");strict.equal(saved.amount_credited,"0.300000000000000000");strict.equal(saved.reviewed_by,null);
+    const [wallet]=await q("SELECT balance FROM wallets WHERE user_id=$1 AND currency='USDT'",[u.id],c);
+    strict.equal(wallet.balance,"0.300000000000000000");
+    const [{count}]=await q("SELECT count(*)::integer AS count FROM ledger WHERE ref_id=$1 AND type='deposit_credit'",[id],c);
+    strict.equal(count,1);
+  });
+});
+test("Concurrent Binance verification workers can credit one pending deposit only once",async()=>{
+  const userId=uid(),depositId=uid(),apiKey="fixture-only-binance-key";
+  const fingerprint=createHash("sha256").update(apiKey).digest("hex").slice(0,24);
+  await q("INSERT INTO users(id,email,username,password_hash,referral_code) VALUES($1,$2,$3,'unused',$4)",
+    [userId,`${userId}@test.invalid`,`Binance-${userId.slice(0,8)}`,uid()]);
+  try{
+    await q("INSERT INTO deposits(id,user_id,currency,network,address_used,amount_claimed,txid,data) VALUES($1,$2,'USDT','TRC20','TExampleDepositAddress123456','0.3','binance-worker-tx',$3::jsonb)",
+      [depositId,userId,JSON.stringify({binance_auto_eligible:true,binance_account_fingerprint:fingerprint,binance_network:"TRX",memo_used:""})]);
+    const match={amount:"0.300",network:"TRX",status:1};
+    const readTestConfig=async()=>({binance:{auto_deposits:true},binance_api_key:apiKey,binance_api_secret:"fixture-only-secret"});
+    const outcomes=await Promise.all([
+      creditVerifiedBinanceDeposit(depositId,fingerprint,match,readTestConfig),
+      creditVerifiedBinanceDeposit(depositId,fingerprint,match,readTestConfig),
+    ]);
+    strict.equal(outcomes.filter((item)=>!item.alreadyCredited).length,1);
+    const [saved]=await q("SELECT status,amount_credited FROM deposits WHERE id=$1",[depositId]);
+    strict.equal(saved.status,"approved");strict.equal(saved.amount_credited,"0.300000000000000000");
+    const [wallet]=await q("SELECT balance FROM wallets WHERE user_id=$1 AND currency='USDT'",[userId]);
+    strict.equal(wallet.balance,"0.300000000000000000");
+    const [{count}]=await q("SELECT count(*)::integer AS count FROM ledger WHERE ref_id=$1 AND type='deposit_credit'",[depositId]);
+    strict.equal(count,1);
+  }finally{
+    await q("DELETE FROM platform_records WHERE user_id=$1",[userId]);
+    await q("DELETE FROM ledger WHERE user_id=$1",[userId]);
+    await q("DELETE FROM wallets WHERE user_id=$1",[userId]);
+    await q("DELETE FROM deposits WHERE id=$1",[depositId]);
+    await q("DELETE FROM users WHERE id=$1",[userId]);
+  }
 });
 test("Withdrawal settlement releases its lock and debits only once",async()=>{
   await sandbox(async(c,u)=>{
@@ -263,6 +333,28 @@ test("Mail retries preserve verification/reset data, honor backoff and stop afte
     const [mail]=await q("SELECT status,attempts,data,error FROM email_logs WHERE id=$1",[id],c);
     strict.equal(mail.status,"sent");strict.equal(mail.attempts,2);strict.equal(mail.error,null);strict.equal(mail.data.next_attempt_at,undefined);strict.equal(attempts,2);
   });
+});
+test("Branded email templates use absolute hosted assets, safe content, links, and support details",()=>{
+  const rendered=renderEmailMessage("verify_email",{subject:"{{title}} — {{site_name}}",body_html:defaultEmailTemplateBody("verify_email")+"<p>{{logo_url}} · {{support_email}} · {{site_url}} · {{year}}</p>"},{
+    title:"Verify & secure your account",body:"Ignore <script>alert(1)</script>",username:"Amara",token:"fixture-token",path:"/verify-email",origin:"https://account.example.invalid",
+  },{
+    site_name:"Vexa",brand_color:"#14b8a6",support_email:"help@example.invalid",
+    smtp:{from_email:"mail@example.invalid",public_url:"https://hosted.example.invalid",email_logo_url:"https://assets.example.invalid/mcv.png"},
+  });
+  strict.match(rendered.html,/src="https:\/\/assets\.example\.invalid\/mcv\.png"/);
+  strict.match(rendered.html,/href="https:\/\/account\.example\.invalid\/verify-email\?token=fixture-token"/);
+  strict.match(rendered.html,/mailto:help@example\.invalid/);
+  strict.match(rendered.html,/https:\/\/hosted\.example\.invalid/);
+  strict.doesNotMatch(rendered.html,/<script/i);
+  strict.ok(rendered.text.includes("Need help?")&&rendered.text.includes("help@example.invalid"));
+  strict.equal(rendered.replyTo,"help@example.invalid");
+});
+test("Email templates fall back to the actual request host or an embedded wordmark",()=>{
+  const hosted=renderEmailMessage("welcome",null,{title:"Welcome",body:"Your account is ready.",origin:"https://new-host.example.invalid"},{site_name:"Vexa",smtp:{from_email:"mail@example.invalid"}});
+  strict.match(hosted.html,/src="https:\/\/new-host\.example\.invalid\/icon-192\.png"/);
+  const noHost=renderEmailMessage("welcome",null,{title:"Welcome",body:"Your account is ready."},{site_name:"Vexa",smtp:{from_email:"mail@example.invalid"}});
+  strict.match(noHost.html,/>MCV<\/span>/);
+  strict.doesNotMatch(noHost.html,/src="\/icon-192\.png"/);
 });
 test("Concurrent stop requests refund once and restore only the reserved capacity",async()=>{
   await concurrentFixture(async(u,assets)=>{

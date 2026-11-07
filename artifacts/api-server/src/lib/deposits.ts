@@ -2,7 +2,7 @@ import { amount, assert, event, move, q } from "./platform";
 import { referralCommission } from "./services";
 
 /** Shared by the review endpoint and regression tests; callers supply the transaction. */
-export async function approveDeposit(c:any,id:string,actorId:string,value?:unknown,reason="Approved") {
+export async function approveDeposit(c:any,id:string,actorId:string|null,value?:unknown,reason="Approved") {
   const [d]=await q("SELECT * FROM deposits WHERE id=$1 FOR UPDATE",[id],c);
   assert(d,"Deposit not found",404);
   if(d.status==="approved")return {alreadyCredited:true,deposit:d};

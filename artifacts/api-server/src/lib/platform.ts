@@ -177,15 +177,22 @@ export const defaultSettings: Record<string, any> = {
   logo: "", favicon: "/brand-icon.svg", app_icon: "/brand-icon.svg", maintenance: false,
   registration_mode: "open", twofa_mode: "optional", admin_twofa_mode: "optional", api_keys_enabled: true,
   force_manual: true, email_verification_required: false, txid_required: true,
-  deposit_terms: "Only send the selected currency on the selected network. Deposits are credited after manual verification. Transfers may be irreversible.",
+  deposit_terms: "Only send the selected currency on the selected network. With automatic Binance deposits enabled, funds are credited only after Binance confirms an exact match; otherwise an administrator reviews the deposit. Transfers may be irreversible.",
   withdrawal_terms: "Verify the network and destination carefully. Cryptocurrency transfers cannot be reversed. Fees apply.",
   billing: { proration: true, early_stop_penalty: "0", grace_minutes: 15, low_balance_threshold: "10", minimum_charge: "0" },
   withdrawal_rules: { cooldown_hours: 24, daily_user_limit: "10000", daily_global_limit: "100000", auto_threshold: "1000", blacklist: [] },
   referral_config: { enabled: true, levels: 1, percentages: ["5","2","1"], trigger: "first_deposit", cap: "1000" },
   security: { captcha_enabled: false, registration_mode: "open" },
-  smtp: { host: "", port: 587, username: "", from_email: "", from_name: "", tls: false },
-  binance: { deposit_hints: false }, notifications: {}, translations: {},
+  smtp: { host: "", port: 587, username: "", from_email: "", from_name: "", public_url: "", email_logo_url: "", tls: false },
+  binance: { auto_deposits: true, deposit_hints: false }, notifications: {}, translations: {},
 };
+export function defaultEmailTemplateBody(key:string){
+  const securityTemplates=new Set(["verify_email","password_reset","password_changed","new_login","twofa_changed","twofa_reset","withdrawal_confirmation"]);
+  const securityNote=securityTemplates.has(key)
+    ?"<p><strong>Security note:</strong> If you did not request this change, contact support using the address in this email.</p>"
+    :"";
+  return `<p>Hello {{username}},</p><h1>{{title}}</h1><p>{{body}}</p>${securityNote}`;
+}
 export async function seedPlatform() {
   // Production does not expose the first-admin preview setup route.
   if(process.env.ADMIN_EMAIL&&process.env.ADMIN_PASSWORD&&!(await q("SELECT id FROM users WHERE role!='user' AND COALESCE((data->>'preview_default')::boolean,false)=false LIMIT 1")).length){
@@ -218,7 +225,7 @@ export async function seedPlatform() {
   for (const item of items) await db.insert(assets).values({...item,currency:"USDT"}).onConflictDoNothing();
   const articles = [
     ["getting-started","Getting started with your account","Getting started","Create an account, review the risk disclosure and secure your account with two-factor authentication. Fund your wallet only after the administrator has configured a verified deposit address."],
-    ["deposits","How crypto deposits work","Wallet & payments","Choose your coin and network. Send funds to the displayed address, then select I have completed deposit. Submit the exact amount and transaction ID. An administrator verifies and credits your deposit; deposits are never credited automatically."],
+    ["deposits","How crypto deposits work","Wallet & payments","Choose your coin and network. Send funds to the displayed address, then submit the exact amount and transaction ID. When automatic Binance deposits are enabled, only a successful exact match is credited; anything unverified remains in the manual review queue."],
     ["withdrawals","Withdrawing your crypto","Wallet & payments","Save a destination address and wait for the 24-hour security cooldown. Check fees and network before submitting. Verify the emailed code or your authenticator. Administrators can process withdrawals manually when automatic service is unavailable."],
     ["rentals","Minute, hour or day?","Rentals","Choose the billing mode that fits your use. Minute rentals are charged as time passes. Hourly and daily rentals prepay their period. Rates are fixed when you book. If your balance is too low, your rental may pause and then stop."],
     ["referrals","Invite friends responsibly","Referrals","Share your unique link. Commissions depend on the administrator's current settings. Earnings are never guaranteed. Self-referrals are not permitted."],
@@ -239,5 +246,12 @@ export async function seedPlatform() {
     "rental_started","rental_extended","rental_completed","rental_stopped","rental_low_balance","rental_auto_renewed","rental_resumed","rental_ending_soon",
     "referral_signup","commission_earned","kyc_requested","kyc_submitted","kyc_approved","kyc_rejected","ticket_created","ticket_reply","ticket_resolved",
     "admin_deposit_submitted","admin_withdrawal_requested","admin_withdrawal_manual","admin_ticket_created","admin_kyc_submitted","reconciliation_mismatch","large_withdrawal","admin_large_withdrawal","direct_message"];
-  for(const key of templates)await db.insert(records).values({id:`email-${key}-en`,kind:"email_template",data:{key,language:"en",subject:"{{title}} — {{site_name}}",body_html:"<h1>{{title}}</h1><p>{{body}}</p>"}}).onConflictDoNothing();
+  for(const key of templates){
+    const id=`email-${key}-en`,subject="{{title}} — {{site_name}}",body_html=defaultEmailTemplateBody(key);
+    await db.insert(records).values({id,kind:"email_template",data:{key,language:"en",subject,body_html,template_version:2}}).onConflictDoNothing();
+    const [existing]=await q("SELECT data FROM platform_records WHERE id=$1 AND kind='email_template'",[id]);
+    if(existing?.data?.subject===subject&&existing.data.body_html==="<h1>{{title}}</h1><p>{{body}}</p>"){
+      await q("UPDATE platform_records SET data=data||$1::jsonb WHERE id=$2 AND kind='email_template'",[JSON.stringify({body_html,template_version:2}),id]);
+    }
+  }
 }
