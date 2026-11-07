@@ -46,7 +46,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const { resolved, setTheme } = useTheme();
   const bootAdmin = (boot.adminUser || boot.admin) as R | null | undefined;
-  const ws = useGetAdminWorkspace({ query: { enabled: !!bootAdmin, queryKey: [...getGetAdminWorkspaceQueryKey(),bootAdmin?.id??'signed-out'], staleTime: Infinity, refetchOnMount: false, retry: 1 } });
+  const ws = useGetAdminWorkspace({ query: { enabled: !!bootAdmin, queryKey: [...getGetAdminWorkspaceQueryKey(),bootAdmin?.id??'signed-out'], staleTime: Infinity, refetchOnMount: false, refetchOnWindowFocus: false, refetchOnReconnect: false, refetchInterval: false, retry: 1 } });
   useEffect(()=>{
     qc.removeQueries({queryKey:getGetAdminWorkspaceQueryKey(),predicate:q=>q.queryKey.at(-1)!==bootAdmin?.id});
   },[qc,bootAdmin?.id]);

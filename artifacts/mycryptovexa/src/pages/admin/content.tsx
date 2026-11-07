@@ -17,7 +17,7 @@ import { LANGUAGES } from '@/lib/i18n';
 import i18n from '@/lib/i18n';
 import { StatusChip, Stat } from '@/components/app/kit';
 import { useAdmin, DataTable, AdminTitle } from './shell';
-import { Section } from './parts';
+import { Section, useUnsavedChangesWarning } from './parts';
 import { RichTextEditor } from '@/components/app/rich-text-editor';
 
 const LEGAL_KEYS = ['terms', 'privacy', 'risk', 'deposit_terms', 'withdrawal_terms'];
@@ -33,7 +33,11 @@ export function AdminContent() {
   const [lang, setLang] = useState('en');
   const page = list(state.legalPages).find((p) => p.key === key && (p.language || 'en') === lang);
   const [body, setBody] = useState('');
-  useEffect(() => setBody(String(page?.body || '')), [key, lang, page?.body]);
+  const [bodyDirty, setBodyDirty] = useState(false);
+  useUnsavedChangesWarning(bodyDirty);
+  useEffect(() => {
+    if (!bodyDirty) setBody(String(page?.body || ''));
+  }, [key, lang, page?.body, bodyDirty]);
   const [tLang, setTLang] = useState('es');
   const [q, setQ] = useState('');
   const base = i18n.getResourceBundle('en', 'translation') as Record<string, string>;
@@ -48,9 +52,9 @@ export function AdminContent() {
       <Tabs defaultValue="legal">
         <TabsList className="rounded-full mb-4"><TabsTrigger value="legal" className="rounded-full">Legal pages</TabsTrigger><TabsTrigger value="translations" className="rounded-full">Translations</TabsTrigger></TabsList>
         <TabsContent value="legal">
-          <div className="flex flex-wrap gap-2 mb-3">{LEGAL_KEYS.map((k) => <button key={k} onClick={() => setKey(k)} className={`rounded-full border px-4 py-1.5 text-sm ${key === k ? 'bg-primary text-primary-foreground border-primary' : 'bg-card'}`} data-testid={`button-legal-${k}`}>{titleCase(k)}</button>)}<span className="ms-auto"><LangSelect value={lang} onChange={setLang} /></span></div>
+          <div className="flex flex-wrap gap-2 mb-3">{LEGAL_KEYS.map((k) => <button key={k} onClick={() => { setBodyDirty(false); setKey(k); }} className={`rounded-full border px-4 py-1.5 text-sm ${key === k ? 'bg-primary text-primary-foreground border-primary' : 'bg-card'}`} data-testid={`button-legal-${k}`}>{titleCase(k)}</button>)}<span className="ms-auto"><LangSelect value={lang} onChange={(next) => { setBodyDirty(false); setLang(next); }} /></span></div>
           <div className="grid xl:grid-cols-2 gap-4">
-            <Section title="Editor"><RichTextEditor id="legal-body" testId="input-legal-body" label={`${titleCase(key)} (${lang})`} value={body} onChange={setBody} minHeight={420} /><Button className="rounded-full mt-3" disabled={pending} onClick={() => run('legal-save', { key, language: lang, body }, { success: 'Legal page saved' })} data-testid="button-save-legal"><Save className="w-4 h-4 me-1.5" />Save</Button></Section>
+            <Section title="Editor">{bodyDirty && <p className="text-xs text-primary mb-2" role="status">Unsaved edits are protected from background data updates.</p>}<RichTextEditor id="legal-body" testId="input-legal-body" label={`${titleCase(key)} (${lang})`} value={body} onChange={(next) => { setBody(next); setBodyDirty(true); }} minHeight={420} /><Button className="rounded-full mt-3" disabled={pending} onClick={() => run('legal-save', { key, language: lang, body }, { success: 'Legal page saved', onSuccess: () => setBodyDirty(false) })} data-testid="button-save-legal"><Save className="w-4 h-4 me-1.5" />Save</Button></Section>
             <Section title="Preview"><iframe title="Legal page preview" sandbox="" srcDoc={body} className="w-full min-h-80 rounded-xl bg-white" /></Section>
           </div>
         </TabsContent>
@@ -79,10 +83,14 @@ export function AdminEmails() {
   const [key, setKey] = useState('');
   const [lang, setLang] = useState('en');
   const [f, setF] = useState({ subject: '', body_html: '' });
+  const [dirty, setDirty] = useState(false);
+  useUnsavedChangesWarning(dirty);
   const [to, setTo] = useState('');
   const k = key || keys[0] || '';
   const t = temps.find((x) => x.key === k && (x.language || 'en') === lang);
-  useEffect(() => setF({ subject: String(t?.subject || ''), body_html: String(t?.body_html || '') }), [k, lang, t?.subject, t?.body_html]);
+  useEffect(() => {
+    if (!dirty) setF({ subject: String(t?.subject || ''), body_html: String(t?.body_html || '') });
+  }, [k, lang, t?.subject, t?.body_html, dirty]);
   const safeText = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
   const configuredUrl = String(smtp.public_url || (typeof window !== 'undefined' ? window.location.origin : ''));
   const baseUrl = /^https:\/\//i.test(configuredUrl) ? configuredUrl.replace(/\/$/, '') : '';
@@ -112,14 +120,15 @@ export function AdminEmails() {
         <TabsList className="rounded-full mb-4"><TabsTrigger value="templates" className="rounded-full">Templates</TabsTrigger><TabsTrigger value="log" className="rounded-full">Delivery log</TabsTrigger></TabsList>
         <TabsContent value="templates">
           <div className="grid xl:grid-cols-[240px_1fr_1fr] gap-4">
-            <div className="rounded-3xl border bg-card p-2 max-h-[70vh] overflow-y-auto">{keys.length ? keys.map((x) => <button key={x} onClick={() => setKey(x)} className={`w-full text-start rounded-xl px-3 py-2 text-sm ${x === k ? 'bg-accent font-semibold' : 'hover:bg-muted'}`} data-testid={`button-template-${x}`}>{titleCase(x)}</button>) : <p className="p-3 text-sm text-muted-foreground">No templates seeded.</p>}</div>
-            <Section title={titleCase(k) || 'Template'} action={<LangSelect value={lang} onChange={setLang} />}>
+            <div className="rounded-3xl border bg-card p-2 max-h-[70vh] overflow-y-auto">{keys.length ? keys.map((x) => <button key={x} onClick={() => { setDirty(false); setKey(x); }} className={`w-full text-start rounded-xl px-3 py-2 text-sm ${x === k ? 'bg-accent font-semibold' : 'hover:bg-muted'}`} data-testid={`button-template-${x}`}>{titleCase(x)}</button>) : <p className="p-3 text-sm text-muted-foreground">No templates seeded.</p>}</div>
+            <Section title={titleCase(k) || 'Template'} action={<LangSelect value={lang} onChange={(next) => { setDirty(false); setLang(next); }} />}>
               <div className="space-y-3">
-                <Input value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} placeholder="Subject" className="rounded-xl" data-testid="input-template-subject" />
-                <RichTextEditor id="template-body" testId="input-template-body" label="Email body" value={f.body_html} onChange={(body_html) => setF({ ...f, body_html })} minHeight={340} hint="Use the visual controls or source mode. The branded email wrapper controls layout and footer." />
+                {dirty && <p className="text-xs text-primary" role="status">Unsaved edits are protected from background data updates.</p>}
+                <Input value={f.subject} onChange={(e) => { setDirty(true); setF({ ...f, subject: e.target.value }); }} placeholder="Subject" className="rounded-xl" data-testid="input-template-subject" />
+                <RichTextEditor id="template-body" testId="input-template-body" label="Email body" value={f.body_html} onChange={(body_html) => { setDirty(true); setF({ ...f, body_html }); }} minHeight={340} hint="Use the visual controls or source mode. The branded email wrapper controls layout and footer." />
                 <p id="template-body-note" className="text-[11px] text-muted-foreground">Template variables are preserved. The server removes unsupported tags and attributes on save; the preview shows your draft, so reload after saving to review the sanitized result. Click a variable to append it.</p>
-                <div className="flex gap-1 flex-wrap">{VARS.map((v) => <button key={v} onClick={() => setF({ ...f, body_html: f.body_html + v })} className="text-[11px] font-mono rounded-full border px-2 py-0.5 hover:bg-muted">{v}</button>)}</div>
-                <Button className="rounded-full" disabled={pending || !k} onClick={() => run('email-template-save', { key: k, language: lang, subject: f.subject, body_html: f.body_html }, { success: 'Template saved' })} data-testid="button-save-template"><Save className="w-4 h-4 me-1.5" />Save</Button>
+                <div className="flex gap-1 flex-wrap">{VARS.map((v) => <button key={v} onClick={() => { setDirty(true); setF({ ...f, body_html: f.body_html + v }); }} className="text-[11px] font-mono rounded-full border px-2 py-0.5 hover:bg-muted">{v}</button>)}</div>
+                <Button className="rounded-full" disabled={pending || !k} onClick={() => run('email-template-save', { key: k, language: lang, subject: f.subject, body_html: f.body_html }, { success: 'Template saved', onSuccess: () => setDirty(false) })} data-testid="button-save-template"><Save className="w-4 h-4 me-1.5" />Save</Button>
               </div>
             </Section>
             <Section title="Branded email preview"><div className="rounded-2xl overflow-hidden border bg-[#f4f7fa]"><div className="p-4 text-[#0B1A2E] text-sm"><div className="font-semibold mb-2">{previewSubject}</div><iframe title="Email template preview" sandbox="" srcDoc={preview} className="w-full min-h-80 bg-white rounded-lg" /></div></div></Section>

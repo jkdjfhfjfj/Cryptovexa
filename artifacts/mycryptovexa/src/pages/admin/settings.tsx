@@ -14,7 +14,7 @@ import { LANGUAGES } from '@/lib/i18n';
 import { FilePick, CoinIcon, ActionSheet } from '@/components/app/kit';
 import { cn } from '@/lib/utils';
 import { useAdmin, AdminTitle, DataTable } from './shell';
-import { Section } from './parts';
+import { Section, useUnsavedChangesWarning } from './parts';
 
 type F = { k: string; label: string; t: 'text' | 'number' | 'bool' | 'select' | 'secret' | 'image' | 'textarea' | 'color' | 'list'; opts?: string[]; hint?: string; step?: string; min?: string };
 const SECTIONS: Record<string, { title: string; fields: F[] }> = {
@@ -35,13 +35,20 @@ function SectionForm({ section }: { section: string }) {
   const settings = (state.settings as R) || {};
   const src = ((settings[section] as R) || (section === 'general' || section === 'branding' ? settings : {})) as R;
   const [v, setV] = useState<R>({});
+  const [dirty, setDirty] = useState(false);
   const [to, setTo] = useState('');
   const [err, setErr] = useState('');
+  useUnsavedChangesWarning(dirty);
+  const update = (key: string, value: unknown) => {
+    setDirty(true);
+    setV((current) => ({ ...current, [key]: value }));
+  };
   useEffect(() => {
+    if (dirty) return;
     const init: R = {};
     cfg.fields.forEach((f) => { if (f.t !== 'secret') init[f.k] = f.hint === 'emails' ? (Array.isArray(src[f.k]) ? src[f.k].join(', ') : String(src[f.k] ?? '')) : f.t === 'list' ? (Array.isArray(src[f.k]) ? src[f.k].join('\n') : src[f.k] ?? '') : src[f.k] ?? (f.k === 'auto_deposits' ? true : f.t === 'bool' ? false : ''); });
     setV(init);
-  }, [section, JSON.stringify(src)]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [section, JSON.stringify(src), dirty]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = () => {
     const values: R = {};
@@ -59,7 +66,7 @@ function SectionForm({ section }: { section: string }) {
     if (invalid.length) { setErr(invalid[0]); return; }
     setErr('');
     if (section === 'security' && values.captcha_enabled && (!values.captcha_site_key || (!values.captcha_secret && !src.captcha_secret_configured))) { setErr('Enabling Turnstile needs both the site key and the secret key (enter the secret in this same save if it is not configured).'); return; }
-    run('settings-save', { section, values }, { success: `${cfg.title} saved`, onSuccess: () => setV((o) => Object.fromEntries(Object.entries(o).filter(([k]) => cfg.fields.find((f) => f.k === k)?.t !== 'secret'))) });
+    run('settings-save', { section, values }, { success: `${cfg.title} saved`, onSuccess: () => { setV((o) => Object.fromEntries(Object.entries(o).filter(([k]) => cfg.fields.find((f) => f.k === k)?.t !== 'secret'))); setDirty(false); } });
   };
 
   return (
@@ -68,22 +75,23 @@ function SectionForm({ section }: { section: string }) {
       {section==='withdrawal_rules'&&<p className="text-sm text-muted-foreground mb-4">Choose a cooldown in minutes or hours for newly whitelisted withdrawal addresses. Addresses already saved keep their current unlock time.</p>}
       {section==='binance'&&<div className="text-sm text-muted-foreground mb-4 space-y-2"><p>Automatic deposits are on by default. Exact Binance history matches are credited automatically only after Binance reports the deposit as successful; unmatched, incomplete, or manual-fallback deposits stay in the admin review queue. Turning this off sends all new deposits to manual review.</p><p>The deposit address is pooled across app users. Users must submit their own transaction ID; a matching transaction claimed by another user can be misattributed. API connection testing is read-only, and this setting does not enable automatic withdrawals.</p></div>}
       {section==='security'&&<p className="text-sm text-muted-foreground mb-4">CAPTCHA uses Cloudflare Turnstile and requires both keys and an allowed hostname. Configure and verify a real challenge before enabling it for customers.</p>}
+      {dirty && <p className="text-xs text-primary mb-3" role="status" data-testid="text-settings-unsaved">Unsaved edits are protected from background data updates. Save before leaving this section.</p>}
       <div className="grid md:grid-cols-2 gap-4">
         {cfg.fields.map((f) => {
           const configured = src[`${f.k}_configured`];
           return (
             <div key={f.k} className={cn(f.t === 'list' || f.t === 'textarea' ? 'md:col-span-2' : '')}>
               {f.t === 'bool' ? (
-                <label className="flex items-center justify-between rounded-2xl border p-3 text-sm h-full">{f.label}<Switch checked={!!v[f.k]} onCheckedChange={(x) => setV({ ...v, [f.k]: x })} data-testid={`switch-${section}-${f.k}`} /></label>
+                <label className="flex items-center justify-between rounded-2xl border p-3 text-sm h-full">{f.label}<Switch checked={!!v[f.k]} onCheckedChange={(x) => update(f.k, x)} data-testid={`switch-${section}-${f.k}`} /></label>
               ) : (
                 <>
                   <Label className="text-xs flex items-center gap-1.5">{f.label}{f.t === 'secret' && (configured ? <span className="text-emerald-600 flex items-center gap-0.5"><CheckCircle2 className="w-3 h-3" />configured</span> : <span className="text-muted-foreground flex items-center gap-0.5"><CircleDashed className="w-3 h-3" />not set</span>)}</Label>
                   <div className="mt-1">
-                    {f.t === 'select' ? <Select value={String(v[f.k] || '')} onValueChange={(x) => setV({ ...v, [f.k]: x })}><SelectTrigger className="rounded-xl" data-testid={`select-${section}-${f.k}`}><SelectValue placeholder="Choose" /></SelectTrigger><SelectContent>{f.opts!.map((o) => <SelectItem key={o} value={o}>{titleCase(o)}</SelectItem>)}</SelectContent></Select>
-                      : f.t === 'list' || f.t === 'textarea' ? <Textarea rows={4} value={String(v[f.k] ?? '')} onChange={(e) => setV({ ...v, [f.k]: e.target.value })} className="rounded-xl font-mono text-xs" data-testid={`input-${section}-${f.k}`} />
-                      : f.t === 'image' ? <div className="flex items-center gap-3">{v[f.k] && <img src={fileUrl(String(v[f.k]))} alt="" className="w-12 h-12 rounded-xl object-contain border bg-muted" />}<div className="flex-1"><FilePick value={String(v[f.k] || '')} onChange={(p) => setV({ ...v, [f.k]: p ? fileUrl(p) : '' })} accept="image/*" label="Upload" testId={`input-${section}-${f.k}`} /></div></div>
-                      : f.t === 'color' ? <div className="flex gap-2"><input type="color" value={String(v[f.k] || '#14B8A6')} onChange={(e) => setV({ ...v, [f.k]: e.target.value })} className="h-10 w-14 rounded-xl border bg-transparent" /><Input value={String(v[f.k] || '')} onChange={(e) => setV({ ...v, [f.k]: e.target.value })} className="rounded-xl font-mono" data-testid={`input-${section}-${f.k}`} /></div>
-                       : <Input type={f.t === 'secret' ? 'password' : f.t === 'number' ? 'number' : 'text'} step={f.step} min={f.min} autoComplete="off" placeholder={f.t === 'secret' ? (configured ? 'Leave blank to keep current value' : 'Enter value') : ''} value={String(v[f.k] ?? '')} onChange={(e) => setV({ ...v, [f.k]: e.target.value })} className="rounded-xl" data-testid={`input-${section}-${f.k}`} />}
+                    {f.t === 'select' ? <Select value={String(v[f.k] || '')} onValueChange={(x) => update(f.k, x)}><SelectTrigger className="rounded-xl" data-testid={`select-${section}-${f.k}`}><SelectValue placeholder="Choose" /></SelectTrigger><SelectContent>{f.opts!.map((o) => <SelectItem key={o} value={o}>{titleCase(o)}</SelectItem>)}</SelectContent></Select>
+                      : f.t === 'list' || f.t === 'textarea' ? <Textarea rows={4} value={String(v[f.k] ?? '')} onChange={(e) => update(f.k, e.target.value)} className="rounded-xl font-mono text-xs" data-testid={`input-${section}-${f.k}`} />
+                      : f.t === 'image' ? <div className="flex items-center gap-3">{v[f.k] && <img src={fileUrl(String(v[f.k]))} alt="" className="w-12 h-12 rounded-xl object-contain border bg-muted" />}<div className="flex-1"><FilePick value={String(v[f.k] || '')} onChange={(p) => update(f.k, p ? fileUrl(p) : '')} accept="image/*" label="Upload" testId={`input-${section}-${f.k}`} /></div></div>
+                      : f.t === 'color' ? <div className="flex gap-2"><input type="color" value={String(v[f.k] || '#14B8A6')} onChange={(e) => update(f.k, e.target.value)} className="h-10 w-14 rounded-xl border bg-transparent" /><Input value={String(v[f.k] || '')} onChange={(e) => update(f.k, e.target.value)} className="rounded-xl font-mono" data-testid={`input-${section}-${f.k}`} /></div>
+                       : <Input type={f.t === 'secret' ? 'password' : f.t === 'number' ? 'number' : 'text'} step={f.step} min={f.min} autoComplete="off" placeholder={f.t === 'secret' ? (configured ? 'Leave blank to keep current value' : 'Enter value') : ''} value={String(v[f.k] ?? '')} onChange={(e) => update(f.k, e.target.value)} className="rounded-xl" data-testid={`input-${section}-${f.k}`} />}
                   </div>
                 </>
               )}
@@ -106,12 +114,18 @@ function TermsForm() {
   const terms = ((state.settings as R)?.terms as R) || {};
   const cur = (terms[lang] as R) || (lang === 'en' ? terms : {});
   const [v, setV] = useState({ deposit: '', withdrawal: '' });
-  useEffect(() => setV({ deposit: String(cur.deposit ?? cur.deposit_terms ?? ''), withdrawal: String(cur.withdrawal ?? cur.withdrawal_terms ?? '') }), [lang, JSON.stringify(cur)]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [dirty, setDirty] = useState(false);
+  useUnsavedChangesWarning(dirty);
+  useEffect(() => {
+    if (dirty) return;
+    setV({ deposit: String(cur.deposit ?? cur.deposit_terms ?? ''), withdrawal: String(cur.withdrawal ?? cur.withdrawal_terms ?? '') });
+  }, [lang, JSON.stringify(cur), dirty]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <Section title="Deposit and withdrawal terms" action={<div className="flex gap-2"><Select value={lang} onValueChange={setLang}><SelectTrigger className="w-32 rounded-full"><SelectValue /></SelectTrigger><SelectContent>{LANGUAGES.map((l) => <SelectItem key={l.code} value={l.code}>{l.label}</SelectItem>)}</SelectContent></Select><Button className="rounded-full" disabled={pending} onClick={() => run('settings-save', { section: 'terms', values: { ...terms, [lang]: v } }, { success: 'Terms saved' })} data-testid="button-save-terms"><Save className="w-4 h-4 me-1.5" />Save</Button></div>}>
+      <Section title="Deposit and withdrawal terms" action={<div className="flex gap-2"><Select value={lang} onValueChange={(next) => { setDirty(false); setLang(next); }}><SelectTrigger className="w-32 rounded-full"><SelectValue /></SelectTrigger><SelectContent>{LANGUAGES.map((l) => <SelectItem key={l.code} value={l.code}>{l.label}</SelectItem>)}</SelectContent></Select><Button className="rounded-full" disabled={pending} onClick={() => run('settings-save', { section: 'terms', values: { ...terms, [lang]: v } }, { success: 'Terms saved', onSuccess: () => setDirty(false) })} data-testid="button-save-terms"><Save className="w-4 h-4 me-1.5" />Save</Button></div>}>
+      {dirty && <p className="text-xs text-primary mb-3" role="status">Unsaved edits are protected from background data updates.</p>}
       <div className="grid md:grid-cols-2 gap-4">
-        <div><Label className="text-xs">Deposit terms</Label><Textarea rows={8} value={v.deposit} onChange={(e) => setV({ ...v, deposit: e.target.value })} className="rounded-xl mt-1" data-testid="input-terms-deposit" /></div>
-        <div><Label className="text-xs">Withdrawal terms</Label><Textarea rows={8} value={v.withdrawal} onChange={(e) => setV({ ...v, withdrawal: e.target.value })} className="rounded-xl mt-1" data-testid="input-terms-withdrawal" /></div>
+        <div><Label className="text-xs">Deposit terms</Label><Textarea rows={8} value={v.deposit} onChange={(e) => { setDirty(true); setV({ ...v, deposit: e.target.value }); }} className="rounded-xl mt-1" data-testid="input-terms-deposit" /></div>
+        <div><Label className="text-xs">Withdrawal terms</Label><Textarea rows={8} value={v.withdrawal} onChange={(e) => { setDirty(true); setV({ ...v, withdrawal: e.target.value }); }} className="rounded-xl mt-1" data-testid="input-terms-withdrawal" /></div>
       </div>
     </Section>
   );

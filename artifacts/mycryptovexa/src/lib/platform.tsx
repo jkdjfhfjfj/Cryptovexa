@@ -58,13 +58,13 @@ export function deepMerge(a: R, b: R): R {
 }
 
 export function PlatformProvider({ children }: { children: ReactNode }) {
-  const boot = useGetBootstrap({ query: { queryKey: getGetBootstrapQueryKey(), staleTime: 60000, retry: 1 } });
+  const boot = useGetBootstrap({ query: { queryKey: getGetBootstrapQueryKey(), staleTime: Infinity, refetchOnMount: false, refetchInterval: false, retry: 1 } });
   const bootUser = (boot.data?.user as R | null) ?? null;
   const qc = useQueryClient();
   const uid = bootUser ? String(bootUser.id ?? bootUser.email ?? 'me') : null;
   // Workspace is scoped per signed-in identity so a different account never sees the previous account's cached data.
   const ws = useGetWorkspace({
-    query: { enabled: !!uid, queryKey: [...getGetWorkspaceQueryKey(), uid] as unknown as ReturnType<typeof getGetWorkspaceQueryKey>, staleTime: Infinity, refetchOnMount: false },
+    query: { enabled: !!uid, queryKey: [...getGetWorkspaceQueryKey(), uid] as unknown as ReturnType<typeof getGetWorkspaceQueryKey>, staleTime: Infinity, refetchOnMount: false, refetchInterval: false },
   });
   const prevUid = useRef<string | null>(uid);
   useEffect(() => {
@@ -193,7 +193,9 @@ export function useRun(kind: Kind) {
           if(signingOut)qc.removeQueries({queryKey:kind==="adminAccount"?getGetAdminWorkspaceQueryKey():getGetWorkspaceQueryKey()});
         }
       }
-      const invalidations: Promise<unknown>[] = [qc.invalidateQueries({ queryKey: getGetBootstrapQueryKey() })];
+      const invalidations: Promise<unknown>[] = [];
+      const updatesPublicBootstrap = kind === 'admin' && ['settings-save', 'asset-save', 'currency-save', 'article-save', 'announcement-save', 'legal-save'].includes(action);
+      if (kind === 'account' || kind === 'adminAccount' || updatesPublicBootstrap) invalidations.push(qc.invalidateQueries({ queryKey: getGetBootstrapQueryKey() }));
       if (kind === 'account' || kind === 'user') invalidations.push(qc.invalidateQueries({ queryKey: getGetWorkspaceQueryKey() }));
       if (kind === 'admin' || kind === 'adminAccount') invalidations.push(qc.invalidateQueries({ queryKey: getGetAdminWorkspaceQueryKey() }));
       await Promise.all(invalidations);

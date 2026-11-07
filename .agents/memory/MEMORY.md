@@ -2,3 +2,4 @@
 - [Verification boundaries](verification-boundaries.md) — domain money tests do not verify authenticated workspace SQL or serialized dates.
 - [Product scope](product-scope.md) — the user confirmed virtual in-app rentals and an intended audience of all countries.
 - [Pooled Binance deposits](binance-pooled-deposits.md) — the operator chose shared addresses with automatic credits and accepts the attribution risk.
+- [Admin editor stability](admin-editor-stability.md) — admin data must not auto-refresh while editing or overwrite unsaved drafts.
