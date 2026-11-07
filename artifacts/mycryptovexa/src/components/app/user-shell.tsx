@@ -8,6 +8,7 @@ import { usePlatform, list, useRun } from '@/lib/platform';
 import { LANGUAGES, applyLanguage } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 import { Logo } from './brand';
+import { TranslationNotice } from './translation-notice';
 
 const NAV = [
   { href: '/', key: 'home', icon: Home },
@@ -105,6 +106,7 @@ export function UserShell({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
+      <TranslationNotice />
       <main className="max-w-7xl mx-auto px-4 pt-5 pb-safe">{children}</main>
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-card/95 backdrop-blur-xl border-t" style={{ paddingBottom: 'env(safe-area-inset-bottom,0px)' }}>
         <div className="grid grid-cols-5 h-[72px]">

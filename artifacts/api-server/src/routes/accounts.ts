@@ -6,7 +6,7 @@ import { z } from "zod";
 import { isIP } from "node:net";
 import { verifyCaptcha } from "../lib/captcha";
 import { AccountActionBody, AdminAccountActionBody } from "@workspace/api-zod";
-import { q, uid, hash, config, safeUser, requireUser, newSession, session, record, token, event, assert, str, encrypt, decrypt, audit, transaction } from "../lib/platform";
+import { q, uid, hash, config, safeUser, requireUser, newSession, session, record, token, event, assert, str, encrypt, decrypt, audit, transaction, accountLinkOrigin, accountAllowedInEnvironment } from "../lib/platform";
 
 export const accounts: IRouter = Router();
 export const totp = (u: any, brand: string) => new TOTP({issuer:brand,label:u.email,algorithm:"SHA1",digits:6,period:30,secret:Secret.fromBase32(decrypt(u.twofa_secret))});
@@ -31,6 +31,7 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
   const isAdmin = req.path.startsWith("/admin"), scope = isAdmin ? "admin" : "user";
   const b = (isAdmin ? AdminAccountActionBody : AccountActionBody).passthrough().parse(req.body) as Record<string, any>;
   const action = String(req.params.action), cfg = await config(true);
+  const linkOrigin=["register","forgot-password","resend-verification"].includes(action)?accountLinkOrigin(req):undefined;
   let result: any = {success:true,message:"Saved"};
   if (action === "register" || (isAdmin && action === "setup")) {
     assert(action !== "register" || !isAdmin, "Use the admin setup flow");
@@ -77,7 +78,7 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
     await newSession(req,res,user.id,scope);
     if(action!=="setup") {
       const code=await token(user.id,"verify");
-      await event(user.id,"Verify your email","Confirm your email address to secure your account.","verify_email",undefined,{token:code,path:"/verify-email",origin:req.get("origin")});
+      await event(user.id,"Verify your email","Confirm your email address to secure your account.","verify_email",undefined,{token:code,path:"/verify-email",origin:linkOrigin});
     }
     result={success:true,message:action==="setup"?"Administrator created":"Account created. Verification email has been queued.",user:safeUser(user)};
   } else if(action==="login") {
@@ -88,7 +89,7 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
     assert(!lockedUntil||new Date(lockedUntil).getTime()<=Date.now(),"This account is temporarily locked after repeated failed sign-ins. Try again in 15 minutes.",429);
     // A fixed dummy hash calculation makes missing-account and wrong-password paths comparable.
     const correct=u ? await argon2.verify(u.password_hash,String(b.password??"")) : (await argon2.hash(String(b.password??"")),false);
-    if(!(u&&correct&&u.status==="active"&&(!isAdmin||u.role!=="user"))){
+    if(!(u&&correct&&accountAllowedInEnvironment(u)&&u.status==="active"&&(!isAdmin||u.role!=="user"))){
       if(u){
         const failures=Number(u.data.login_failures??0)+1,limit=Math.max(3,Math.min(20,Number(cfg.login_lockout_attempts??5)));
         await q("UPDATE users SET data=data||$1::jsonb WHERE id=$2",[JSON.stringify({login_failures:failures,login_locked_until:failures>=limit?new Date(Date.now()+15*60000).toISOString():null}),u.id]);
@@ -115,7 +116,7 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
   } else if(action==="forgot-password") {
     const email=z.string().email().parse(b.email).toLowerCase();
     const [u]=await q("SELECT * FROM users WHERE email=$1",[email]);
-    if(u){const code=await token(u.id,"reset");await event(u.id,"Reset your password","Your reset link expires in one hour.","password_reset",undefined,{token:code,path:"/reset-password",origin:req.get("origin")});}
+    if(u){const code=await token(u.id,"reset");await event(u.id,"Reset your password","Your reset link expires in one hour.","password_reset",undefined,{token:code,path:"/reset-password",origin:linkOrigin});}
     result.message="If an account exists, a password reset email has been queued.";
   } else if(action==="reset-password" || action==="verify-email") {
     const kind=action==="reset-password"?"reset":"verify";
@@ -139,7 +140,7 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
       result.message="Signed out";
     } else if(action==="resend-verification"){
       const code=await token(u.id,"verify");
-      await event(u.id,"Verify your email","Confirm your email to secure your account.","verify_email",undefined,{token:code,path:"/verify-email",origin:req.get("origin")});
+      await event(u.id,"Verify your email","Confirm your email to secure your account.","verify_email",undefined,{token:code,path:"/verify-email",origin:linkOrigin});
       result.message="Verification email queued";
     } else if(action==="change-password"){
       assert(await argon2.verify(u.password_hash,String(b.currentPassword)),"Current password is incorrect");

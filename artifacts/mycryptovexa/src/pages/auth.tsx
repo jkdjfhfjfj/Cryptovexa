@@ -19,7 +19,7 @@ export function AuthLayout({ title, sub, children, footer }: { title: string; su
         <div className="relative"><Link href="/"><Logo name={brand.name} logo={brand.logo} size={36} /></Link></div>
         <div className="relative max-w-md">
           <h2 className="text-4xl font-semibold leading-tight">Rent what you need. Pay for exactly the time you use.</h2>
-          <p className="text-white/70 mt-4">Crypto-funded balances, transparent per-minute billing and a person reviewing every deposit.</p>
+          <p className="text-white/70 mt-4">Virtual rentals inside the app, crypto-funded balances and a person reviewing every deposit. No physical property or hardware access is included.</p>
         </div>
         <p className="relative text-xs text-white/50">Rentals and crypto carry risk. Returns are never guaranteed.</p>
       </div>
@@ -28,6 +28,7 @@ export function AuthLayout({ title, sub, children, footer }: { title: string; su
           <Link href="/" className="lg:hidden mb-8 inline-block"><Logo name={brand.name} logo={brand.logo} size={32} /></Link>
           <h1 className="text-3xl font-semibold tracking-tight">{title}</h1>
           {sub && <p className="text-muted-foreground text-sm mt-1.5">{sub}</p>}
+          <p className="mt-3 text-xs text-muted-foreground">Virtual in-app rentals only. Fees do not provide access to real buildings or machines, or investment returns.</p>
           <div className="mt-7">{children}</div>
           {footer && <div className="mt-6 text-sm text-muted-foreground">{footer}</div>}
         </div>
@@ -48,6 +49,8 @@ export function Field({ icon: Icon, label, ...p }: { icon: typeof Mail; label: s
 export function LoginPage() {
   const { t } = useTranslation();
   const [, navigate] = useLocation();
+  const {user}=usePlatform();
+  useEffect(()=>{if(user?.id)navigate('/');},[user?.id,navigate]);
   const { run, pending } = useRun('account');
   const [f, setF] = useState({ email: '', password: '', code: '' });
   const [need2fa, setNeed2fa] = useState(false);
@@ -62,7 +65,7 @@ export function LoginPage() {
     navigate('/');
   };
   return (
-    <AuthLayout title={t('signIn')} sub="Welcome back." footer={<div className="space-y-4"><p>New here? <Link href="/register" className="text-primary font-semibold">{t('signUp')}</Link></p><div className="border-t pt-4"><Link href="/admin/login" className="inline-flex min-h-11 items-center text-primary font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md" data-testid="link-admin-login">Administrator sign in</Link><p className="text-xs mt-1">Staff use a separate, secure sign-in.</p></div></div>}>
+    <AuthLayout title={t('signIn')} sub="Welcome back." footer={<p>New here? <Link href="/register" className="text-primary font-semibold">{t('signUp')}</Link></p>}>
       <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         <Field icon={Mail} label="Email" type="email" autoComplete="email" value={f.email} disabled={need2fa} onChange={(e) => setF({ ...f, email: e.target.value })} data-testid="input-email" />
         <Field icon={Lock} label="Password" type="password" autoComplete="current-password" value={f.password} disabled={need2fa} onChange={(e) => setF({ ...f, password: e.target.value })} data-testid="input-password" />

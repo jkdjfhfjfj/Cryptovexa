@@ -25,9 +25,9 @@ export async function startRental(user: any,b: any,c: any) {
   await move(c,user.id,a.currency,`-${cost}`,"rental_charge",id,`rent-start:${id}`);
   const [r]=await q(`INSERT INTO rentals(id,user_id,asset_id,billing_mode,rate_snapshot,end_at,billed_until,total_cost,auto_renew,units,data)
     VALUES($1,$2,$3,$4,$5,now()+$6*interval '1 minute',now()+$7*interval '1 minute',$8,$9,$10,$11::jsonb) RETURNING *`,
-    [id,user.id,a.id,b.billing_mode,rate,minutes,b.billing_mode==="minute"?1:minutes,cost,Boolean(b.auto_renew),units,JSON.stringify({currency:a.currency,asset_title:a.title,duration:d,billing:cfg.billing,base_cost:baseCost})],c);
+    [id,user.id,a.id,b.billing_mode,rate,minutes,b.billing_mode==="minute"?1:minutes,cost,Boolean(b.auto_renew),units,JSON.stringify({currency:a.currency,asset_title:a.title,duration:d,billing:cfg.billing,base_cost:baseCost,rental_kind:"virtual",virtual_terms_accepted_at:b.virtual_terms_accepted===true?new Date().toISOString():null})],c);
   await q("UPDATE assets SET available_units=available_units-$1 WHERE id=$2",[units,a.id],c);
-  await event(user.id,"Rental started",`${a.title} is now reserved. Contact support to arrange access or provisioning.`,"rental_started",c);
+  await event(user.id,"Virtual rental started",`${a.title} is now reserved inside the app. This fee does not provide access to real property or computing hardware, or an investment return.`,"rental_started",c);
   return r;
 }
 export async function stopRental(user: any,b: any,c: any,admin=false) {

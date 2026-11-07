@@ -27,6 +27,19 @@ export class AppError extends Error {
 export function assert(condition: unknown, message: string, status = 400): asserts condition {
   if (!condition) throw new AppError(message, status);
 }
+/** Reject password-reset/verification Origin poisoning before looking up an account. */
+export function accountLinkOrigin(req:Request) {
+  const host=req.get("host");
+  assert(host,"Application host is unavailable",400);
+  const expected=new URL(`https://${host}`);
+  let origin:URL;
+  try{origin=new URL(req.get("origin")||expected.origin);}catch{throw new AppError("Invalid request origin",403);}
+  const devHost=process.env.NODE_ENV!=="production"?process.env.REPLIT_DEV_DOMAIN:undefined;
+  assert((origin.host===expected.host||origin.host===devHost)&&!origin.username&&!origin.password&&origin.pathname==="/"&&!origin.search&&!origin.hash&&
+    (origin.protocol==="https:"||(process.env.NODE_ENV!=="production"&&origin.protocol==="http:")),
+    "Request origin must match this application",403);
+  return origin.origin;
+}
 export const amountSchema = z.string().regex(/^(?:0|[1-9]\d{0,17})(?:\.\d{1,18})?$/, "Use a positive decimal amount");
 export const amount = (v: unknown) => {
   assert(typeof v==="string","Send money amounts as decimal strings");
@@ -57,6 +70,9 @@ export const safeUser = (u: any) => {
   const { password_hash, twofa_secret, data, ...rest } = u;
   return { ...rest, preferences: data?.preferences ?? {} };
 };
+export function accountAllowedInEnvironment(user:any,environment=process.env.NODE_ENV){
+  return !!user&&!(environment==="production"&&user.data?.preview_default===true);
+}
 export async function session(req: Request, scope = "user"): Promise<any | null> {
   if(scope==="user"&&req.method==="GET"&&req.get("authorization")?.startsWith("Bearer vexa_")){
     const [setting]=await q("SELECT value FROM settings WHERE key='api_keys_enabled'");
@@ -67,14 +83,14 @@ export async function session(req: Request, scope = "user"): Promise<any | null>
       const ips=r.data.ip_allowlist??[];
       if(ips.length&&!ips.includes(req.ip))return null;
       await q("UPDATE platform_records SET data=data||$1::jsonb WHERE id=$2",[JSON.stringify({last_used:new Date().toISOString()}),r.id]);
-      const [u]=await q("SELECT * FROM users WHERE id=$1 AND status='active'",[r.user_id]);return u??null;
+      const [u]=await q("SELECT * FROM users WHERE id=$1 AND status='active'",[r.user_id]);return accountAllowedInEnvironment(u)?u:null;
     }
   }
   const raw = req.cookies?.[scope === "admin" ? "vexa_admin" : "vexa_user"];
   if (!raw) return null;
   const [row] = await q(`SELECT u.*,s.id AS session_id FROM login_sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token_hash=$1 AND s.scope=$2 AND s.revoked=false AND s.expires_at>now() AND u.status='active'`, [hash(`${scope}:${raw}`), scope]);
-  return row ?? null;
+  return accountAllowedInEnvironment(row)?row:null;
 }
 export async function requireUser(req: Request, scope = "user") {
   const u = await session(req, scope);
@@ -104,6 +120,12 @@ export async function ownedRecord(id: string, kind: string, userId?: string, c: 
 export async function audit(u: any, action: string, entityId: string | null, req?: Request, meta: any = {}, c: any = pool) {
   await q("INSERT INTO audit_logs(id,actor_id,actor_role,action,entity_id,ip,meta) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)",
     [uid(), u.id, u.role, action, entityId, req?.ip ?? "worker", JSON.stringify(meta)], c);
+}
+/** Must be called inside the same transaction that performs and records an action. */
+export async function replayRequest(c:any,key:string) {
+  await q("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[key],c);
+  const [saved]=await q("SELECT data FROM platform_records WHERE id=$1 AND kind='request'",[key],c);
+  return saved?.data;
 }
 export async function event(userId: string, title: string, body: string, template: string, c: any = pool, extra: any = {}) {
   const sensitive=["withdrawal_confirmation","verify_email","password_reset"].includes(template);
@@ -166,7 +188,7 @@ export const defaultSettings: Record<string, any> = {
 };
 export async function seedPlatform() {
   // Production does not expose the first-admin preview setup route.
-  if(process.env.ADMIN_EMAIL&&process.env.ADMIN_PASSWORD&&!(await q("SELECT id FROM users WHERE role!='user' LIMIT 1")).length){
+  if(process.env.ADMIN_EMAIL&&process.env.ADMIN_PASSWORD&&!(await q("SELECT id FROM users WHERE role!='user' AND COALESCE((data->>'preview_default')::boolean,false)=false LIMIT 1")).length){
     const password=str(process.env.ADMIN_PASSWORD,12,128);
     await q("INSERT INTO users(id,email,username,password_hash,role,referral_code,email_verified) VALUES($1,$2,$3,$4,'superadmin',$5,true) ON CONFLICT(email) DO NOTHING",
       [uid(),process.env.ADMIN_EMAIL.toLowerCase(),"Administrator",await argon2.hash(password),uid().slice(0,10)]);

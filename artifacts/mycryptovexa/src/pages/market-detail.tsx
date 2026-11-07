@@ -26,6 +26,7 @@ export default function MarketDetailPage() {
   const { run, pending } = useRun('user');
   const [img, setImg] = useState(0);
   const [open, setOpen] = useState(false);
+  const [virtualAccepted, setVirtualAccepted] = useState(false);
   const [mode, setMode] = useState<'minute' | 'hour' | 'day'>('hour');
   const [dur, setDur] = useState(1);
   const [units, setUnits] = useState(1);
@@ -107,7 +108,7 @@ export default function MarketDetailPage() {
         </div>
       </div>
 
-      <ActionSheet open={open} onOpenChange={setOpen} title={`${t('rent')} ${a.title}`} description="The rate is snapshotted when you confirm.">
+      <ActionSheet open={open} onOpenChange={(value)=>{setOpen(value);if(!value)setVirtualAccepted(false);}} title={`${t('rent')} ${a.title}`} description="Virtual, in-app rental only. The rate is snapshotted when you confirm.">
         <div className="space-y-5">
           <div className="grid grid-cols-3 gap-2 p-1 rounded-full bg-muted">
             {MODES.map((m) => <button key={m.k} disabled={rates[m.k] == null} onClick={() => setMode(m.k)} className={cn('rounded-full py-2 text-sm', mode === m.k ? 'bg-card shadow font-semibold' : 'text-muted-foreground')} data-testid={`button-mode-${m.k}`}>{titleCase(m.k)}</button>)}
@@ -135,8 +136,9 @@ export default function MarketDetailPage() {
           </div>
           {short && <p className="text-sm text-destructive">Your available balance does not cover this. <Link href="/wallet?sheet=deposit" className="underline font-medium">Deposit {a.currency}</Link></p>}
           {outOfRange && <p className="text-sm text-amber-600">Duration is outside the allowed window for this listing.</p>}
-          <Button size="lg" className="w-full rounded-full h-14" disabled={pending || short || outOfRange || units > num(a.available_units)} data-testid="button-confirm-rent"
-            onClick={() => run('rent', { asset_id: a.id, billing_mode: mode, duration: dur, units, auto_renew: auto }, { success: 'Rental started', onSuccess: () => { setOpen(false); navigate('/rentals'); } })}>
+          <label className="flex items-start gap-3 rounded-2xl border bg-accent/40 p-3 text-xs leading-relaxed"><input type="checkbox" checked={virtualAccepted} onChange={(e)=>setVirtualAccepted(e.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-primary" data-testid="checkbox-virtual-rental" /><span>I understand that this fee buys virtual rental time inside the app only. No physical property, computing hardware access or investment return is provided.</span></label>
+          <Button size="lg" className="w-full rounded-full h-14" disabled={pending || !virtualAccepted || short || outOfRange || units > num(a.available_units)} data-testid="button-confirm-rent"
+            onClick={() => run('rent', { asset_id: a.id, billing_mode: mode, duration: dur, units, auto_renew: auto, virtual_terms_accepted:true }, { success: 'Rental started', onSuccess: () => { setOpen(false); setVirtualAccepted(false); navigate('/rentals'); } })}>
             {t('confirm')}
           </Button>
         </div>

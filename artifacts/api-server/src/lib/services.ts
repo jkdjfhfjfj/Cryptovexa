@@ -37,23 +37,34 @@ export async function sendEmail(to:string,template:string,data:any) {
   const link=data.token&&data.origin?`${String(data.origin).replace(/\/$/,"")}${data.path}?token=${encodeURIComponent(data.token)}`:null;
   const content=(tmpl?replace(tmpl.body_html):`<h1 style="font-size:24px">${escapeHtml(data.title)}</h1><p style="line-height:1.7">${escapeHtml(data.body)}</p>`)+
     (link?`<p><a href="${escapeHtml(link)}" style="background:#14b8a6;color:#06101d;padding:12px 20px;border-radius:10px;display:inline-block">Continue securely</a></p>`:"");
-  const transport=nodemailer.createTransport({host:smtp.host,port:Number(smtp.port??587),secure:Boolean(smtp.tls)&&Number(smtp.port)===465,requireTLS:Number(smtp.port)!==465,
+  const transport=nodemailer.createTransport({host:smtp.host,port:Number(smtp.port??587),secure:Number(smtp.port??587)===465,requireTLS:Number(smtp.port??587)!==465,
     ...(smtp.username?{auth:{user:smtp.username,pass:cfg.smtp_password}}:{}),connectionTimeout:15000,socketTimeout:20000});
   const color=/^#[\da-f]{6}$/i.test(cfg.brand_color)?cfg.brand_color:"#14b8a6";
   await transport.sendMail({from:{name:smtp.from_name||cfg.site_name,address:smtp.from_email},to,subject,html:
     `<div style="background:#06101d;padding:36px 16px;font-family:Arial,sans-serif;color:#e8f0f7"><div style="max-width:560px;margin:auto;background:#0b1a2e;padding:32px;border-radius:20px;border-top:4px solid ${color}"><div style="color:${color};font-size:20px;font-weight:bold">${escapeHtml(cfg.site_name)}</div>${content}<hr style="border:0;border-top:1px solid #294153;margin-top:30px"><p style="font-size:12px;color:#8fa3b8">© ${new Date().getFullYear()} ${escapeHtml(cfg.site_name)}. Cryptocurrency involves risk. Returns are not guaranteed.</p></div></div>`});
+}
+/** Claim and deliver one item; injectable delivery/client allow rollback-isolated retry tests. */
+export async function deliverQueuedEmail(id:string,deliver=sendEmail,c?:any,now=new Date()) {
+  const [e]=await q(`UPDATE email_logs SET status='sending',attempts=attempts+1,
+    data=data||jsonb_build_object('delivery_started_at',$2::text)
+    WHERE id=$1 AND status IN ('queued','failed') AND attempts<5
+    AND (data->>'next_attempt_at' IS NULL OR (data->>'next_attempt_at')::timestamptz<=$2::timestamptz) RETURNING *`,[id,now.toISOString()],c);
+  if(!e)return false;
+  try{
+    await deliver(e.to,e.template,e.data);
+    await q("UPDATE email_logs SET status='sent',error=NULL,data=(data-'next_attempt_at')||jsonb_build_object('sent_at',$2::text) WHERE id=$1",[id,now.toISOString()],c);
+  }catch{
+    await q("UPDATE email_logs SET status='failed',error='SMTP delivery failed. Verify credentials and sender configuration.',data=data||$2::jsonb WHERE id=$1",
+      [id,JSON.stringify({next_attempt_at:new Date(now.getTime()+Math.min(3600000,60000*2**e.attempts)).toISOString()})],c);
+  }
+  return true;
 }
 async function emailWorker(){
   const cfg=await config(true);
   if(!cfg.smtp?.host)return;
   await q("UPDATE email_logs SET status='failed' WHERE status='sending' AND (data->>'delivery_started_at')::timestamptz<now()-interval '5 minutes'");
   const ids=await q("SELECT id FROM email_logs WHERE status IN ('queued','failed') AND attempts<5 AND (data->>'next_attempt_at' IS NULL OR (data->>'next_attempt_at')::timestamptz<=now()) ORDER BY created_at LIMIT 10");
-  for(const {id} of ids){
-    const [e]=await q("UPDATE email_logs SET status='sending',attempts=attempts+1,data=data||jsonb_build_object('delivery_started_at',now()) WHERE id=$1 AND status IN ('queued','failed') RETURNING *",[id]);
-    if(!e)continue;
-    try{await sendEmail(e.to,e.template,e.data);await q("UPDATE email_logs SET status='sent',error=NULL,data=data||jsonb_build_object('sent_at',now()) WHERE id=$1",[id]);}
-    catch{await q("UPDATE email_logs SET status='failed',error='SMTP delivery failed. Verify credentials and sender configuration.',data=data||$2::jsonb WHERE id=$1",[id,JSON.stringify({next_attempt_at:new Date(Date.now()+Math.min(3600000,60000*2**e.attempts)).toISOString()})]);}
-  }
+  for(const {id} of ids)await deliverQueuedEmail(id);
 }
 async function expireWithdrawalConfirmations(){
   const ids=await q("SELECT id FROM withdrawals WHERE status='pending_confirm' AND created_at<now()-interval '1 hour' LIMIT 100");
@@ -69,7 +80,7 @@ async function withdrawalWorker(){
     data=data||'{"outcome_unknown":true}'::jsonb WHERE status='processing' AND binance_id IS NULL
     AND COALESCE((data->>'processing_started_at')::timestamptz,created_at)<now()-interval '5 minutes'`);
   // Claim each row once. An ambiguous network outcome is NOT automatically retried.
-  const list=await q("SELECT id FROM withdrawals WHERE status='queued' LIMIT 20");
+  const list=await q("SELECT id FROM withdrawals WHERE status='queued' AND COALESCE((data->>'test_only')::boolean,false)=false LIMIT 20");
   for(const {id} of list){
     const [w]=await q("UPDATE withdrawals SET status='processing',data=data||jsonb_build_object('processing_started_at',now()) WHERE id=$1 AND status='queued' RETURNING *",[id]);if(!w)continue;
     const [{overThreshold}]=await q('SELECT $1::numeric>$2::numeric AS "overThreshold"',[w.data.usd_value??"0",cfg.withdrawal_rules.auto_threshold??"1000"]);

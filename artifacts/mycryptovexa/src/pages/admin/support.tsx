@@ -13,6 +13,7 @@ import { ago, titleCase } from '@/lib/format';
 import { LANGUAGES } from '@/lib/i18n';
 import { StatusChip, ActionSheet, EmptyState } from '@/components/app/kit';
 import { cn } from '@/lib/utils';
+import { RichTextEditor, sanitizeRichHtml } from '@/components/app/rich-text-editor';
 import { useAdmin, DataTable, AdminTitle, userLabel } from './shell';
 import { usePrompt, Section } from './parts';
 
@@ -112,9 +113,8 @@ export function AdminHelp() {
             <Input placeholder="Title" value={String(edit.title)} onChange={(e) => setEdit({ ...edit, title: e.target.value, slug: edit.id ? edit.slug : e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') })} className="rounded-xl" data-testid="input-article-title" />
             <div className="grid grid-cols-2 gap-2"><Input placeholder="Slug" value={String(edit.slug)} onChange={(e) => setEdit({ ...edit, slug: e.target.value })} className="rounded-xl" /><Input placeholder="Category" value={String(edit.category)} onChange={(e) => setEdit({ ...edit, category: e.target.value })} className="rounded-xl" data-testid="input-article-category" /></div>
             <Select value={String(edit.language)} onValueChange={(v) => setEdit({ ...edit, language: v })}><SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger><SelectContent>{LANGUAGES.map((l) => <SelectItem key={l.code} value={l.code}>{l.label}</SelectItem>)}</SelectContent></Select>
-            <Label className="text-xs">Body (HTML: headings, lists, links, images)</Label>
-            <Textarea rows={12} value={String(edit.body)} onChange={(e) => setEdit({ ...edit, body: e.target.value })} className="rounded-xl font-mono text-xs" data-testid="input-article-body" />
-            <details className="rounded-xl border p-3"><summary className="text-xs cursor-pointer">Preview</summary><div className="prose prose-sm dark:prose-invert mt-2" dangerouslySetInnerHTML={{ __html: String(edit.body) }} /></details>
+            <RichTextEditor id="article-body" testId="input-article-body" label="Article body" value={String(edit.body ?? '')} onChange={(v) => setEdit((e) => (e ? { ...e, body: v } : e))} />
+            <details className="rounded-xl border p-3"><summary className="text-xs cursor-pointer">Preview</summary><div className="prose prose-sm dark:prose-invert mt-2 [&_img]:max-w-full [&_img]:h-auto" dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(String(edit.body ?? '')) }} /></details>
             <label className="flex items-center justify-between text-sm">Published<Switch checked={!!edit.published} onCheckedChange={(v) => setEdit({ ...edit, published: v })} data-testid="switch-article-published" /></label>
             <div className="flex gap-2">
               {edit.id && <Button variant="outline" className="rounded-full text-destructive" disabled={pending} onClick={() => p.open({ title: 'Delete article?', danger: true, fields: [], confirm: 'Delete', onSubmit: async () => { await run('article-delete', { id: edit.id }, { success: 'Deleted', onSuccess: () => setEdit(null) }); } })} data-testid="button-delete-article"><Trash2 className="w-4 h-4" /></Button>}

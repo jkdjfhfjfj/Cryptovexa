@@ -4,8 +4,10 @@ import { randomBytes } from "node:crypto";
 import type { Server } from "node:http";
 import { pool } from "@workspace/db";
 import app from "../app";
-import { hash, q, uid, transaction } from "../lib/platform";
+import { hash, q, uid, transaction, move } from "../lib/platform";
 import { ObjectStorageService } from "../lib/objectStorage";
+
+strict.notEqual(process.env.NODE_ENV,"production","API fixtures must never run against a production runtime");
 
 // Full HTTP/SQL boundary checks, without external transfers or global settings changes.
 const people=new Map<string,{id:string;email:string;cookie:string;csrf:string}>();
@@ -36,6 +38,13 @@ async function request(role:string,path:string,body?:any,csrf=true){
   const p=people.get(role)!;
   return fetch(`${origin}/api${path}`,{method:body?"POST":"GET",headers:{cookie:p.cookie,...(body?{"Content-Type":"application/json",...(csrf?{"x-csrf-token":p.csrf}:{})}:{})},...(body?{body:JSON.stringify({request_id:uid(),...body})}:{})});
 }
+test("Reset mail cannot be sent with an attacker-controlled Origin",async()=>{
+  const p=people.get("user")!;
+  const r=await fetch(`${origin}/api/v1/auth/forgot-password`,{method:"POST",headers:{"Content-Type":"application/json",origin:"https://attacker.invalid",cookie:p.cookie,"x-csrf-token":p.csrf},body:JSON.stringify({email:p.email})});
+  strict.equal(r.status,403);
+  const body:any=await r.json();strict.doesNotMatch(body.error,/Security token expired/);
+  const [{n}]=await q("SELECT count(*)::integer AS n FROM email_logs WHERE \"to\"=$1 AND template='password_reset'",[people.get("user")!.email]);strict.equal(n,0);
+});
 test("Signed-in user workspace queries actual schema and excludes authentication material",async()=>{
   const r=await request("user","/v1/workspace");
   strict.equal(r.status,200);
@@ -91,7 +100,37 @@ test("Staff force-stop requires a reason and records it in the audit trail",asyn
   const [r]=await q("SELECT status FROM rentals WHERE id=$1",[rentalId]);strict.equal(r.status,"cancelled");
   const [log]=await q("SELECT meta FROM audit_logs WHERE actor_id=$1 AND action='rental-stop' AND entity_id=$2",[people.get("superadmin")!.id,rentalId]);strict.equal(log.meta.reason,reason);
 });
-test("A real private upload is readable by owner/reviewer but denied to finance",async()=>{
+test("Concurrent HTTP rental request replay returns the same real response and debit",async()=>{
+  const user=people.get("user")!,requestId=uid();
+  await transaction(async c=>{
+    await move(c,user.id,"USDT","20","test_funding","api-fixture",`api-fund:${user.id}`);
+    await q("UPDATE assets SET hour_rate='1' WHERE id=$1",[assetId],c);
+  });
+  const denied=await request("user","/v1/actions/rent",{asset_id:assetId,billing_mode:"hour",duration:1,units:1});
+  strict.equal(denied.status,400);
+  const body={asset_id:assetId,billing_mode:"hour",duration:1,units:1,request_id:requestId,virtual_terms_accepted:true};
+  const [a,b]=await Promise.all([request("user","/v1/actions/rent",body),request("user","/v1/actions/rent",body)]);
+  strict.equal(a.status,200);strict.equal(b.status,200);
+  const first:any=await a.json(),second:any=await b.json();
+  strict.deepEqual(second,first);strict.equal(first.success,true);strict.equal(typeof first.id,"string");
+  const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE user_id=$1 AND type='rental_charge'",[user.id]);strict.equal(n,1);
+  const [wallet]=await q("SELECT balance FROM wallets WHERE user_id=$1 AND currency='USDT'",[user.id]);strict.equal(wallet.balance,"19.000000000000000000");
+});
+test("Manual-only withdrawal fixtures reject submission and release their reserve exactly once",async()=>{
+  const user=people.get("user")!,id=uid(),requestId=uid();
+  await transaction(async c=>{
+    await move(c,user.id,"USDT","0","withdrawal_lock",id,`api-lock:${id}`,"11");
+    await q(`INSERT INTO withdrawals(id,user_id,currency,network,address,amount,fee,status,data) VALUES($1,$2,'USDT','BEP20','TEST ONLY','10','1','manual_fallback',$3::jsonb)`,[id,user.id,JSON.stringify({total:"11",test_only:true})],c);
+  });
+  strict.equal((await request("superadmin","/admin/actions/withdrawal-approve",{id})).status,403);
+  const body={id,reason:"Isolated fixture rejection",request_id:requestId};
+  strict.equal((await request("superadmin","/admin/actions/withdrawal-reject",body)).status,200);
+  strict.equal((await request("superadmin","/admin/actions/withdrawal-reject",body)).status,200);
+  const [wallet]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1 AND currency='USDT'",[user.id]);
+  strict.equal(wallet.balance,"19.000000000000000000");strict.equal(wallet.locked,"0.000000000000000000");
+  const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='withdrawal_rejected'",[id]);strict.equal(n,1);
+});
+test("A real private upload is owner/reviewer-only until attached as a finance proof",async()=>{
   const bytes=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ9kAAAAASUVORK5CYII=","base64");
   const r=await request("user","/v1/uploads",{name:"isolated-api-regression.png",contentType:"image/png",size:bytes.length});
   strict.equal(r.status,200);
@@ -106,6 +145,8 @@ test("A real private upload is readable by owner/reviewer but denied to finance"
     const review=await request("support",`/v1/files/${upload.id}`);strict.equal(review.status,200);await review.arrayBuffer();
     const [{n}]=await q("SELECT count(*)::integer AS n FROM audit_logs WHERE actor_id=$1 AND action='private_document_view' AND entity_id=$2",[people.get("support")!.id,upload.id]);
     strict.equal(n,1);
+    await q(`INSERT INTO deposits(id,user_id,currency,network,address_used,amount_claimed,txid,proof_image) VALUES($1,$2,'USDT','BEP20','TEST ONLY - NO FUNDS','0.00000001',$3,$4)`,[uid(),people.get("user")!.id,uid(),upload.objectPath]);
+    const proofReview=await request("finance",`/v1/files/${upload.id}`);strict.equal(proofReview.status,200);await proofReview.arrayBuffer();
   }finally{
     const file=await new ObjectStorageService().getObjectEntityFile(upload.objectPath);
     await file.delete({ignoreNotFound:true});
@@ -117,6 +158,8 @@ test.after(async()=>{
   try{
     await transaction(async c=>{
       await q("DELETE FROM rentals WHERE user_id=ANY($1::text[])",[ids],c);
+      await q("DELETE FROM deposits WHERE user_id=ANY($1::text[])",[ids],c);
+      await q("DELETE FROM withdrawals WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM assets WHERE id=$1",[assetId],c);
       await q("DELETE FROM ledger WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM private_files WHERE user_id=ANY($1::text[])",[ids],c);

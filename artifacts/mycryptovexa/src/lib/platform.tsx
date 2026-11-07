@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useGetBootstrap,
@@ -175,11 +175,25 @@ export function useRun(kind: Kind) {
   const adm = useAdminAction(opts);
   const admAcc = useAdminAccountAction(opts);
   const m = { account: acc, user: usr, admin: adm, adminAccount: admAcc }[kind];
+  const [refreshing,setRefreshing]=useState(false);
 
   const run = async (action: string, data: R = {}, o: RunOpts = {}): Promise<R | null> => {
+    setRefreshing(true);
     try {
       const payload = kind === 'adminAccount' || kind === 'account' ? { ...data } : { request_id: crypto.randomUUID(), ...data };
       const res = (await m.mutateAsync({ action, data: payload })) as R;
+      if((kind==="account"||kind==="adminAccount")&&["login","register","setup","logout"].includes(action)&&res?.success!==false){
+        const signingOut=action==="logout";
+        if(signingOut||(res.user&&!res.requires2fa&&!res.requiresTwoFactor&&!res.twofa_required)){
+          // Cancel an in-flight guest response before publishing the server-confirmed identity.
+          await qc.cancelQueries({queryKey:getGetBootstrapQueryKey()});
+          qc.setQueryData(getGetBootstrapQueryKey(),(old:unknown)=>({
+            ...(old as R??{}),
+            ...(kind==="adminAccount"?{adminUser:signingOut?null:res.user,admin:signingOut?null:res.user}:{user:signingOut?null:res.user}),
+          }));
+          if(signingOut)qc.removeQueries({queryKey:kind==="adminAccount"?getGetAdminWorkspaceQueryKey():getGetWorkspaceQueryKey()});
+        }
+      }
       await Promise.all([
         qc.invalidateQueries({ queryKey: getGetBootstrapQueryKey() }),
         qc.invalidateQueries({ queryKey: getGetWorkspaceQueryKey() }),
@@ -195,7 +209,7 @@ export function useRun(kind: Kind) {
     } catch (e) {
       if (!o.silentError) toast({ title: 'Request failed', description: errorMessage(e), variant: 'destructive' });
       return null;
-    }
+    } finally {setRefreshing(false);}
   };
-  return { run, pending: m.isPending };
+  return { run, pending: m.isPending||refreshing };
 }

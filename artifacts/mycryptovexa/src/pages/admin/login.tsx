@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { Mail, Lock, KeyRound, AtSign, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,8 @@ export default function AdminLoginPage() {
   const [need2fa, setNeed2fa] = useState(false);
   const [setup, setSetup] = useState(false);
   const setupAvailable = !!state.adminSetupAvailable;
+  const adminId=(state.adminUser as {id?:string}|undefined)?.id??(state.admin as {id?:string}|undefined)?.id;
+  useEffect(()=>{if(adminId)navigate('/admin/dashboard');},[adminId,navigate]);
 
   if (setup && setupAvailable) {
     const ok = f.email && f.username && f.password.length >= 12;

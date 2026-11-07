@@ -1,11 +1,13 @@
 import test from "node:test";
 import strict from "node:assert/strict";
 import { pool } from "@workspace/db";
-import { q, uid, move, amount, encrypt, decrypt, putSetting, config, record, transaction } from "../lib/platform";
+import { q, uid, move, amount, encrypt, decrypt, putSetting, config, record, transaction, replayRequest, accountAllowedInEnvironment } from "../lib/platform";
 import { startRental, stopRental, billRental } from "../lib/rentals";
 import { approveDeposit } from "../lib/deposits";
-import { referralCommission, settleWithdrawal } from "../lib/services";
+import { referralCommission, settleWithdrawal, deliverQueuedEmail } from "../lib/services";
 import { reviewDocuments } from "../lib/verification";
+
+strict.notEqual(process.env.NODE_ENV,"production","Financial fixtures must never run against a production runtime");
 
 async function sandbox(fn:(c:any,u:any)=>Promise<void>){
   const c=await pool.connect();
@@ -16,6 +18,13 @@ async function sandbox(fn:(c:any,u:any)=>Promise<void>){
     await fn(c,u);
   }finally{await c.query("ROLLBACK");c.release();}
 }
+test("Default preview accounts cannot authenticate in production",()=>{
+  const preview={data:{preview_default:true}},operator={data:{}};
+  strict.equal(accountAllowedInEnvironment(preview,"development"),true);
+  strict.equal(accountAllowedInEnvironment(preview,"production"),false);
+  strict.equal(accountAllowedInEnvironment(operator,"production"),true);
+  strict.equal(accountAllowedInEnvironment(null,"production"),false);
+});
 test("Money validation rejects floats, exponents, negatives and zero",()=>{
   for(const n of [0.1,1,"1e3","-1","0","0.000","NaN","1.1234567890123456789"])strict.throws(()=>amount(n));
   strict.equal(amount("0.000000000000000001"),"0.000000000000000001");
@@ -189,6 +198,80 @@ test("Concurrent rentals cannot spend the same wallet balance twice",async()=>{
     strict.equal(w.balance,"0.000000000000000000");strict.equal(w.locked,"0.000000000000000000");
     const [{n}]=await q("SELECT count(*)::integer AS n FROM rentals WHERE user_id=$1",[u.id]);strict.equal(n,1);
   },"10");
+});
+test("Minute billing has one debit per billed boundary when ticks are replayed",async()=>{
+  await sandbox(async(c,u)=>{
+    const r=await rentalFixture(c,u),start=new Date(r.start_at).getTime();
+    for(const clock of [start+60001,start+60001,start+120001,start+120001,start+180001]){
+      await billRental(c,r.id,new Date(clock));
+    }
+    const [{n,unique_keys}]=await q("SELECT count(*)::integer AS n,count(DISTINCT idempotency_key)::integer AS unique_keys FROM ledger WHERE ref_id=$1 AND type='rental_charge'",[r.id],c);
+    strict.equal(n,3);strict.equal(unique_keys,3);
+    const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id],c);strict.equal(w.balance,"97.000000000000000000");
+  });
+});
+test("Concurrent billing workers settle expiry once and release capacity once",async()=>{
+  await concurrentFixture(async(u,assets)=>{
+    await q("UPDATE assets SET minute_rate='1' WHERE id=$1",[assets[0]]);
+    const r=await transaction(c=>startRental(u,{asset_id:assets[0],billing_mode:"minute",duration:3,units:1},c));
+    const clock=new Date(new Date(r.end_at).getTime()+1);
+    await Promise.all([transaction(c=>billRental(c,r.id,clock)),transaction(c=>billRental(c,r.id,clock))]);
+    const [saved]=await q("SELECT status,total_cost FROM rentals WHERE id=$1",[r.id]);
+    strict.equal(saved.status,"completed");strict.equal(saved.total_cost,"3.000000000000000000");
+    const [a]=await q("SELECT available_units FROM assets WHERE id=$1",[assets[0]]);strict.equal(a.available_units,1);
+    const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"97.000000000000000000");
+    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_charge'",[r.id]);strict.equal(n,2);
+  });
+});
+test("Concurrent renewal workers prepay a new period only once",async()=>{
+  await concurrentFixture(async(u,assets)=>{
+    const r=await transaction(c=>startRental(u,{asset_id:assets[0],billing_mode:"hour",duration:1,units:1,auto_renew:true},c));
+    const clock=new Date(new Date(r.end_at).getTime()+1);
+    await Promise.all([transaction(c=>billRental(c,r.id,clock)),transaction(c=>billRental(c,r.id,clock))]);
+    const [saved]=await q("SELECT status,total_cost,billed_until FROM rentals WHERE id=$1",[r.id]);
+    strict.equal(saved.status,"active");strict.equal(saved.total_cost,"20.000000000000000000");
+    strict.equal(new Date(saved.billed_until).getTime(),clock.getTime()+3600000);
+    const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"80.000000000000000000");
+    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_charge'",[r.id]);strict.equal(n,2);
+  });
+});
+test("Concurrent replay of the same request returns its saved booking without charging again",async()=>{
+  await concurrentFixture(async(u,assets)=>{
+    const key=`request:${u.id}:rent:${uid()}`;
+    const submit=()=>transaction(async c=>{
+      const saved=await replayRequest(c,key);if(saved)return saved;
+      const r=await startRental(u,{asset_id:assets[0],billing_mode:"hour",duration:1,units:1},c);
+      const result={success:true,id:r.id};await record("request",result,u.id,key,c);return result;
+    });
+    const [a,b]=await Promise.all([submit(),submit()]);strict.deepEqual(a,b);
+    const [{n}]=await q("SELECT count(*)::integer AS n FROM rentals WHERE user_id=$1",[u.id]);strict.equal(n,1);
+    const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[u.id]);strict.equal(w.balance,"90.000000000000000000");
+  });
+});
+test("Mail retries preserve verification/reset data, honor backoff and stop after success",async()=>{
+  await sandbox(async(c,u)=>{
+    const id=uid(),data={token:"fixture-only-token",path:"/reset-password",origin:"https://example.invalid",language:"en"};
+    await q(`INSERT INTO email_logs(id,"to",template,data) VALUES($1,$2,'password_reset',$3::jsonb)`,[id,u.email,JSON.stringify(data)],c);
+    let attempts=0;
+    const failing=async()=>{attempts++;throw Error("Fixture failure, no network");};
+    const clock=new Date();
+    strict.equal(await deliverQueuedEmail(id,failing,c,clock),true);
+    strict.equal(await deliverQueuedEmail(id,failing,c,clock),false);strict.equal(attempts,1);
+    const success=async(to:string,template:string,payload:any)=>{strict.equal(to,u.email);strict.equal(template,"password_reset");for(const key of Object.keys(data))strict.equal(payload[key],data[key as keyof typeof data]);attempts++;};
+    strict.equal(await deliverQueuedEmail(id,success,c,new Date(clock.getTime()+121000)),true);
+    strict.equal(await deliverQueuedEmail(id,success,c,new Date(clock.getTime()+1000000)),false);
+    const [mail]=await q("SELECT status,attempts,data,error FROM email_logs WHERE id=$1",[id],c);
+    strict.equal(mail.status,"sent");strict.equal(mail.attempts,2);strict.equal(mail.error,null);strict.equal(mail.data.next_attempt_at,undefined);strict.equal(attempts,2);
+  });
+});
+test("Concurrent stop requests refund once and restore only the reserved capacity",async()=>{
+  await concurrentFixture(async(u,assets)=>{
+    const r=await transaction(c=>startRental(u,{asset_id:assets[0],billing_mode:"hour",duration:1,units:1},c));
+    await Promise.all([transaction(c=>stopRental(u,{id:r.id},c)),transaction(c=>stopRental(u,{id:r.id},c))]);
+    const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='rental_refund'",[r.id]);strict.equal(n,1);
+    const [a]=await q("SELECT available_units FROM assets WHERE id=$1",[assets[0]]);strict.equal(a.available_units,1);
+    const [{valid}]=await q("SELECT w.balance=(SELECT sum(amount) FROM ledger WHERE user_id=$1 AND currency='USDT') AS valid FROM wallets w WHERE user_id=$1 AND currency='USDT'",[u.id]);strict.equal(valid,true);
+  });
 });
 test("Encrypted settings round trip without retaining plaintext",()=>{
   const plain="test-only-noncredential",a=encrypt(plain),b=encrypt(plain);

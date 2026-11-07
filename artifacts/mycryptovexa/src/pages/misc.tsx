@@ -44,7 +44,7 @@ export function KycPage() {
         {['Requested', 'Submitted', req.status === 'rejected' ? 'Rejected' : 'Approved'].map((s, i) => <div key={s} className="flex-1"><div className={cn('h-1.5 rounded-full', (req.status === 'rejected' ? i <= 2 : i <= statusIdx) ? (req.status === 'rejected' && i === 2 ? 'bg-destructive' : 'brand-grad') : 'bg-muted')} /><div className="text-[11px] mt-1">{s}</div></div>)}
       </div>
       {req.note && <div className="rounded-2xl bg-muted p-4 text-sm mb-4">{req.note}</div>}
-      {req.block_withdrawals && <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm mb-4 flex gap-2"><CalendarClock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />Withdrawals stay paused until verification is approved.</div>}
+      {req.block_withdrawals && req.status!=='approved' && user.withdrawals_blocked && <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm mb-4 flex gap-2"><CalendarClock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />Withdrawals stay paused until verification is approved.</div>}
       <div className="grid sm:grid-cols-2 gap-3 mb-6">
         {items.map((k) => { const d = docFor(k); const m = ITEM_META[k] || { label: titleCase(k), icon: FileText, hint: '' }; return (
           <div key={k} className="rounded-2xl border bg-card p-4 flex items-start gap-3" data-testid={`kyc-item-${k}`}><m.icon className="w-5 h-5 text-primary mt-0.5" /><div className="flex-1"><div className="font-medium text-sm">{m.label}</div>{d?.reject_reason && <p className="text-xs text-destructive mt-1">{d.reject_reason}</p>}</div><StatusChip status={d ? String(d.status || 'submitted') : docs[k] ? 'submitted' : 'requested'} /></div>

@@ -10,6 +10,7 @@ import { csrfOpts, adminExportUrl, type R } from '@/lib/api';
 import { useTheme } from '@/lib/theme';
 import { cn } from '@/lib/utils';
 import { Logo } from '@/components/app/brand';
+import { TranslationNotice } from '@/components/app/translation-notice';
 import { PageSkeleton, ErrorState } from '@/components/app/kit';
 
 export const MODULES = [
@@ -113,6 +114,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
               <button className="p-2 rounded-full hover:bg-muted" onClick={logout} data-testid="button-admin-logout"><LogOut className="w-4 h-4" /></button>
             </div>
           </header>
+          <TranslationNotice />
           <main className="p-4 md:p-6 max-w-[1500px]">{setupRequired && current === 'security' && <div className="mb-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm" data-testid="banner-admin-2fa-setup"><div className="font-semibold">Enroll two-factor authentication to continue</div><p className="text-muted-foreground mt-1">Staff accounts must have an authenticator app linked. The rest of the console stays locked and shows no operational data until enrollment is complete.</p></div>}{needs2fa && current !== 'security' && <Link href="/admin/security" className="block mb-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm" data-testid="banner-admin-2fa">Two-factor authentication is required for staff. Console actions are blocked until you enable it. Set it up now.</Link>}{(status === 403 || setupRequired) && current !== 'security' ? <ErrorState error={ws.error} onRetry={() => ws.refetch()} /> : can(current) ? children : <ErrorState error={{ message: 'Your role does not include this module.' }} />}</main>
         </div>
       </div>

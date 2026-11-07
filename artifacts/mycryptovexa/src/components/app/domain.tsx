@@ -36,7 +36,7 @@ export function AssetCard({ a, i = 0 }: { a: R; i?: number }) {
       <div className="relative aspect-[4/3] overflow-hidden bg-muted">
         <img src={assetImage(a)} alt={String(a.title)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" loading="lazy" />
         <div className="absolute top-3 start-3 flex items-center gap-1.5 rounded-full bg-[#0B1A2E]/80 text-white text-[11px] px-2.5 py-1 backdrop-blur">
-          <Icon className="w-3.5 h-3.5" />{a.category || a.type}
+          <Icon className="w-3.5 h-3.5" />Virtual · {a.category || a.type}
         </div>
         <div className="absolute top-3 end-3"><StatusChip status={num(a.available_units) > 0 ? a.status || 'available' : 'unavailable'} className="bg-card/90" /></div>
       </div>

@@ -59,7 +59,7 @@ export function HelpPage() {
   const shown = arts.filter((a) => (cat === 'all' || (a.category || 'General') === cat) && (!q || `${a.title} ${a.body}`.toLowerCase().includes(q.toLowerCase())));
   const tickets = list(state.tickets);
   return (
-    <div>
+    <div className="min-w-0 max-w-full">
       <div className="vault-card rounded-[28px] p-6 md:p-10 relative overflow-hidden mb-6">
         <div className="absolute inset-0 hex-pattern" />
         <div className="relative max-w-xl">
@@ -68,17 +68,17 @@ export function HelpPage() {
           <div className="relative mt-5"><Search className="absolute start-4 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" /><Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search deposits, rentals, 2FA…" className="ps-11 h-12 rounded-full bg-white/10 border-white/20 text-white placeholder:text-white/50" data-testid="input-help-search" /></div>
         </div>
       </div>
-      <div className="grid lg:grid-cols-[1fr_340px] gap-6">
-        <div>
-          <div className="flex gap-2 overflow-x-auto no-scrollbar mb-4">
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_340px] gap-6">
+        <div className="min-w-0">
+          <div className="flex w-full min-w-0 max-w-full gap-2 overflow-x-auto no-scrollbar mb-4" aria-label="Help categories">
             {['all', ...cats].map((c) => <button key={c} onClick={() => setCat(c)} className={cn('press shrink-0 rounded-full border px-4 py-1.5 text-sm', cat === c ? 'bg-primary text-primary-foreground border-primary' : 'bg-card')} data-testid={`filter-help-${c}`}>{c === 'all' ? t('all') : c}</button>)}
           </div>
-          {shown.length ? <div className="grid sm:grid-cols-2 gap-3">{shown.map((a) => (
-            <Link key={String(a.id)} href={`/help/article/${a.slug}`} className="press rounded-3xl border bg-card p-5 hover:border-primary/50 block" data-testid={`card-article-${a.slug}`}>
+          {shown.length ? <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] sm:grid-cols-[repeat(2,minmax(0,1fr))] gap-3">{shown.map((a) => (
+            <Link key={String(a.id)} href={`/help/article/${a.slug}`} className="press min-w-0 [overflow-wrap:anywhere] rounded-3xl border bg-card p-5 hover:border-primary/50 block" data-testid={`card-article-${a.slug}`}>
               <BookOpen className="w-5 h-5 text-primary" /><h3 className="font-semibold mt-3">{a.title}</h3><p className="text-sm text-muted-foreground mt-1 line-clamp-2">{String(a.body || '').replace(/<[^>]+>/g, '').slice(0, 140)}</p><span className="text-[11px] text-muted-foreground mt-3 block">{a.category}</span>
             </Link>))}</div> : <EmptyState icon={Search} title="No articles found" body="Try different words, or open a ticket and a person will reply." />}
         </div>
-        <aside className="space-y-3">
+        <aside className="min-w-0 space-y-3">
           <div className="rounded-3xl border bg-card p-5">
             <h3 className="font-semibold flex items-center gap-2"><Ticket className="w-4 h-4" />{t('tickets')}</h3>
             {user ? (
@@ -116,13 +116,13 @@ export function ArticlePage() {
     } finally { setVoting(false); }
   };
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="min-w-0 max-w-3xl mx-auto [overflow-wrap:anywhere]">
       <Link href="/help" className="flex items-center gap-1.5 text-sm text-muted-foreground mb-4" data-testid="link-back-help"><ArrowLeft className="w-4 h-4 rtl:rotate-180" />Help Center</Link>
       <span className="text-xs uppercase tracking-wider text-primary">{a.category}</span>
       <h1 className="text-3xl font-semibold tracking-tight mt-1 mb-6">{a.title}</h1>
-      <article className="prose prose-slate dark:prose-invert max-w-none prose-img:rounded-2xl" dangerouslySetInnerHTML={{ __html: String(a.body || '') }} data-testid="article-body" />
+      <article className="prose prose-slate dark:prose-invert min-w-0 max-w-none prose-img:rounded-2xl [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto" dangerouslySetInnerHTML={{ __html: String(a.body || '') }} data-testid="article-body" />
       <div className="mt-10 rounded-3xl border bg-card p-5 flex flex-wrap items-center gap-3">
-        <span className="font-medium flex-1">{voted === null ? 'Was this helpful?' : 'Thanks for the feedback.'}</span>
+        <span className="w-full sm:w-auto sm:flex-1 font-medium">{voted === null ? 'Was this helpful?' : 'Thanks for the feedback.'}</span>
         {voted === null && <><Button variant="outline" className="rounded-full" disabled={voting} onClick={() => vote(true)} data-testid="button-helpful-yes"><ThumbsUp className="w-4 h-4 me-1.5" />Yes</Button><Button variant="outline" className="rounded-full" disabled={voting} onClick={() => vote(false)} data-testid="button-helpful-no"><ThumbsDown className="w-4 h-4 me-1.5" />No</Button></>}
         {voted === false && user && <Link href="/help" className="text-sm text-primary underline">Open a ticket</Link>}
       </div>
@@ -159,9 +159,9 @@ export function TicketThreadPage() {
   if (!tk) return <EmptyState icon={Ticket} title="Ticket not found" action={<Link href="/help/tickets" className="text-primary font-semibold">All tickets</Link>} />;
   const closed = tk.status === 'closed';
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="min-w-0 max-w-3xl mx-auto [overflow-wrap:anywhere]">
       <Link href="/help/tickets" className="flex items-center gap-1.5 text-sm text-muted-foreground mb-4"><ArrowLeft className="w-4 h-4 rtl:rotate-180" />Tickets</Link>
-      <div className="flex items-start justify-between gap-3 mb-5"><div><h1 className="text-2xl font-semibold">{tk.subject}</h1><p className="text-xs text-muted-foreground mt-1">#{String(tk.id).slice(0, 8)} · {titleCase(String(tk.category))} · {titleCase(String(tk.priority))}</p></div><StatusChip status={tk.status} /></div>
+      <div className="flex items-start justify-between gap-3 mb-5"><div className="min-w-0"><h1 className="text-2xl font-semibold">{tk.subject}</h1><p className="text-xs text-muted-foreground mt-1">#{String(tk.id).slice(0, 8)} · {titleCase(String(tk.category))} · {titleCase(String(tk.priority))}</p></div><StatusChip status={tk.status} /></div>
       <div className="space-y-3">
         {list(tk.messages).filter((m) => !m.is_internal).map((m: R) => {
           const mine = m.author_type === 'user';

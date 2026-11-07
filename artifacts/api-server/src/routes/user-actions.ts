@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { randomInt } from "node:crypto";
 import { UserActionBody } from "@workspace/api-zod";
 import { z } from "zod";
-import { q, uid, hash, config, requireUser, amount, str, assert, transaction, record, ownedRecord, getRecords, move, event, token } from "../lib/platform";
+import { q, uid, hash, config, requireUser, amount, str, assert, transaction, record, ownedRecord, getRecords, move, event, token, replayRequest } from "../lib/platform";
 import { startRental, stopRental, extendRental } from "../lib/rentals";
 import { checkTwofa } from "./accounts";
 import { marketRates } from "../lib/services";
@@ -32,9 +32,8 @@ userActions.post("/v1/actions/:action",async(req,res):Promise<void>=>{
     if(["deposit","withdraw","confirm-withdrawal","rent","rental-stop","rental-extend"].includes(action))assert(requestId,"A unique request ID is required for financial actions");
     const requestKey=requestId?`request:${u.id}:${action}:${requestId}`:null;
     if(requestKey){
-      await q("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[requestKey],c);
-      const [saved]=await q("SELECT data FROM platform_records WHERE id=$1 AND kind='request'",[requestKey],c);
-      if(saved){result=saved.data;return;}
+      const saved=await replayRequest(c,requestKey);
+      if(saved){result=saved;return;}
     }
     if(action==="deposit"){
       assert(b.terms===true,"Accept the deposit terms");
@@ -121,6 +120,7 @@ userActions.post("/v1/actions/:action",async(req,res):Promise<void>=>{
       await q("UPDATE withdrawals SET status='queued' WHERE id=$1 AND user_id=$2 AND status='pending_confirm'",[b.id,u.id],c);
       result.message="Withdrawal confirmed and queued";
     }else if(action==="rent"){
+      assert(b.virtual_terms_accepted===true,"Acknowledge that this is a virtual, in-app rental only");
       const rental=await startRental(u,b,c);result={...result,id:rental.id,message:"Rental started"};
     }else if(action==="rental-stop"){await stopRental(u,b,c);result.message="Rental stopped";}
     else if(action==="rental-extend"){await extendRental(u,b,c);result.message="Rental extended";}

@@ -3,7 +3,7 @@ import argon2 from "argon2";
 import { z } from "zod";
 import sanitizeHtml from "sanitize-html";
 import { AdminActionBody } from "@workspace/api-zod";
-import { q, uid, config, requireUser, amount, amountSchema, str, assert, transaction, record, ownedRecord, getRecords, move, event, audit, putSetting, defaultSettings, token } from "../lib/platform";
+import { q, uid, config, requireUser, amount, amountSchema, str, assert, transaction, record, ownedRecord, getRecords, move, event, audit, putSetting, defaultSettings, token, replayRequest, accountLinkOrigin } from "../lib/platform";
 import { binance, sendEmail, settleWithdrawal, referralCommission, reconcile } from "../lib/services";
 import { stopRental, extendRental } from "../lib/rentals";
 import { reviewDocuments } from "../lib/verification";
@@ -32,7 +32,7 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
   }
   if(action==="email-test"){
     if(b.resend_log_id){
-      const [old]=await q("UPDATE email_logs SET status='queued',attempts=0,error=NULL WHERE id=$1 RETURNING id",[str(b.resend_log_id)]);
+      const [old]=await q("UPDATE email_logs SET status='queued',attempts=0,error=NULL,data=data-'next_attempt_at'-'delivery_started_at' WHERE id=$1 RETURNING id",[str(b.resend_log_id)]);
       assert(old,"Email log not found",404);
       await audit(u,"email_resend",old.id,req);
       res.json({...result,message:"Original email queued for retry"});return;
@@ -51,9 +51,8 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
     if(["balance-adjust","deposit-approve","withdrawal-approve","withdrawal-retry","withdrawal-reject","withdrawal-sent","rental-stop","rental-extend"].includes(action))assert(requestId,"A unique request ID is required for financial actions");
     const requestKey=requestId?`admin-request:${u.id}:${action}:${requestId}`:null;
     if(requestKey){
-      await q("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[requestKey],c);
-      const [saved]=await q("SELECT data FROM platform_records WHERE id=$1 AND kind='request'",[requestKey],c);
-      if(saved){result=saved.data;return;}
+      const saved=await replayRequest(c,requestKey);
+      if(saved){result=saved;return;}
     }
     if(action==="settings-save"){
       const section=str(b.section,1,100),v=z.record(z.unknown()).parse(b.values) as any;
@@ -162,6 +161,7 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
       }
     }else if(action.startsWith("withdrawal-")){
       const [w]=await q("SELECT * FROM withdrawals WHERE id=$1 FOR UPDATE",[str(b.id)],c);
+      assert(!w?.data?.test_only||action==="withdrawal-reject","Test-only withdrawals can only be rejected; submission and settlement are forbidden",403);
       assert(w,"Withdrawal not found",404);
       if(action==="withdrawal-sent"){
         assert(!w.binance_id,"This request has a Binance ID. Verify Binance history rather than sending a duplicate transfer.");
@@ -200,7 +200,7 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
       await event(target.id,"Account updated",`Your account status is ${status}.`,"account_updated",c);
       if(b.send_password_reset){
         const reset=await token(target.id,"reset",{},undefined,c);
-        await event(target.id,"Reset your password","An administrator requested a password reset. The link expires in one hour.","password_reset",c,{token:reset,path:"/reset-password",origin:req.get("origin")});
+        await event(target.id,"Reset your password","An administrator requested a password reset. The link expires in one hour.","password_reset",c,{token:reset,path:"/reset-password",origin:accountLinkOrigin(req)});
       }
     }else if(action==="user-email"){
       const [target]=await q("SELECT * FROM users WHERE id=$1",[str(b.id)],c);

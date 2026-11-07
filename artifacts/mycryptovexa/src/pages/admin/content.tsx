@@ -18,6 +18,7 @@ import i18n from '@/lib/i18n';
 import { StatusChip, Stat } from '@/components/app/kit';
 import { useAdmin, DataTable, AdminTitle } from './shell';
 import { Section } from './parts';
+import { RichTextEditor } from '@/components/app/rich-text-editor';
 
 const LEGAL_KEYS = ['terms', 'privacy', 'risk', 'deposit_terms', 'withdrawal_terms'];
 
@@ -49,7 +50,7 @@ export function AdminContent() {
         <TabsContent value="legal">
           <div className="flex flex-wrap gap-2 mb-3">{LEGAL_KEYS.map((k) => <button key={k} onClick={() => setKey(k)} className={`rounded-full border px-4 py-1.5 text-sm ${key === k ? 'bg-primary text-primary-foreground border-primary' : 'bg-card'}`} data-testid={`button-legal-${k}`}>{titleCase(k)}</button>)}<span className="ms-auto"><LangSelect value={lang} onChange={setLang} /></span></div>
           <div className="grid xl:grid-cols-2 gap-4">
-            <Section title="Editor (HTML)"><Textarea rows={20} value={body} onChange={(e) => setBody(e.target.value)} className="rounded-xl font-mono text-xs" data-testid="input-legal-body" /><Button className="rounded-full mt-3" disabled={pending} onClick={() => run('legal-save', { key, language: lang, body }, { success: 'Legal page saved' })} data-testid="button-save-legal"><Save className="w-4 h-4 me-1.5" />Save</Button></Section>
+            <Section title="Editor"><RichTextEditor id="legal-body" testId="input-legal-body" label={`${titleCase(key)} (${lang})`} value={body} onChange={setBody} minHeight={420} /><Button className="rounded-full mt-3" disabled={pending} onClick={() => run('legal-save', { key, language: lang, body }, { success: 'Legal page saved' })} data-testid="button-save-legal"><Save className="w-4 h-4 me-1.5" />Save</Button></Section>
             <Section title="Preview"><iframe title="Legal page preview" sandbox="" srcDoc={body} className="w-full min-h-80 rounded-xl bg-white" /></Section>
           </div>
         </TabsContent>
@@ -92,7 +93,9 @@ export function AdminEmails() {
             <Section title={titleCase(k) || 'Template'} action={<LangSelect value={lang} onChange={setLang} />}>
               <div className="space-y-3">
                 <Input value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} placeholder="Subject" className="rounded-xl" data-testid="input-template-subject" />
-                <Textarea rows={16} value={f.body_html} onChange={(e) => setF({ ...f, body_html: e.target.value })} className="rounded-xl font-mono text-xs" data-testid="input-template-body" />
+                <Label htmlFor="template-body" className="text-xs flex items-center justify-between"><span>Email body: HTML source only</span><span className="font-normal text-muted-foreground">Source editing, no visual editor.</span></Label>
+                <Textarea id="template-body" aria-describedby="template-body-note" rows={16} value={f.body_html} onChange={(e) => setF({ ...f, body_html: e.target.value })} className="rounded-xl font-mono text-xs" data-testid="input-template-body" />
+                <p id="template-body-note" className="text-[11px] text-muted-foreground">Template variables and supported HTML are retained. Unsafe or unsupported tags and attributes, including inline styles, are removed server-side on save. The preview shows your submitted draft; the saved, server-sanitized output may differ until reload. Click a variable to append it.</p>
                 <div className="flex gap-1 flex-wrap">{VARS.map((v) => <button key={v} onClick={() => setF({ ...f, body_html: f.body_html + v })} className="text-[11px] font-mono rounded-full border px-2 py-0.5 hover:bg-muted">{v}</button>)}</div>
                 <Button className="rounded-full" disabled={pending || !k} onClick={() => run('email-template-save', { key: k, language: lang, subject: f.subject, body_html: f.body_html }, { success: 'Template saved' })} data-testid="button-save-template"><Save className="w-4 h-4 me-1.5" />Save</Button>
               </div>
