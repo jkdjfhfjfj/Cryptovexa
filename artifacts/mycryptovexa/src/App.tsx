@@ -43,6 +43,15 @@ function AdminRedirect() {
   return null;
 }
 
+function RootPage() {
+  const { user, brand } = usePlatform();
+  const [, nav] = useLocation();
+  useEffect(() => {
+    if (!user) nav('/login', { replace: true });
+  }, [user, nav]);
+  return user ? <UserShell><HomePage /></UserShell> : <Splash name={brand.name} />;
+}
+
 const TITLES: [RegExp, string][] = [
   [/^\/$/, 'Home'], [/^\/market\/.+/, 'Asset'], [/^\/market/, 'Marketplace'], [/^\/rentals/, 'My rentals'], [/^\/wallet/, 'Wallet'],
   [/^\/referrals/, 'Referrals'], [/^\/help\/tickets/, 'Support tickets'], [/^\/help\/article/, 'Help article'], [/^\/help/, 'Help Center'],
@@ -85,7 +94,7 @@ function Router() {
   return (
     <RoutedErrorBoundary>
       <Switch>
-        <Route path="/" component={u(HomePage)} />
+        <Route path="/" component={RootPage} />
         <Route path="/market" component={u(MarketPage)} />
         <Route path="/market/:id" component={u(MarketDetailPage)} />
         <Route path="/rentals" component={u(RentalsPage)} />
