@@ -92,7 +92,7 @@ export default function MarketDetailPage() {
             ))}
           </div>
           <div className="rounded-2xl border bg-card p-4 text-sm">
-            <div className="flex justify-between gap-3"><span className="text-muted-foreground">Capital required per unit</span><span className="num font-medium">{configured ? amount(a.capital_required) : 'Not configured'} {configured ? a.currency : ''}</span></div>
+            <div className="flex justify-between gap-3"><span className="text-muted-foreground">{t('capitalRequired')}</span><span className="num font-medium">{configured ? amount(a.capital_required) : 'Not configured'} {configured ? a.currency : ''}</span></div>
             {!configured && <p className="text-xs text-amber-600 mt-2">The administrator must set capital and profit terms before this rental can start.</p>}
           </div>
           {(minD > 0 || maxD > 0) && <p className="text-xs text-muted-foreground">Duration window: {minD || 1} to {maxD || 'unlimited'} minutes.</p>}
@@ -104,7 +104,7 @@ export default function MarketDetailPage() {
         </div>
       </div>
 
-      <ActionSheet open={open} onOpenChange={(value)=>{setOpen(value);if(!value)setVirtualAccepted(false);}} title={`${t('rent')} ${a.title}`} description="Capital is locked until maturity. The displayed profit schedule is fixed when you confirm.">
+      <ActionSheet open={open} onOpenChange={(value)=>{setOpen(value);if(!value)setVirtualAccepted(false);}} title={`${t('rent')} ${a.title}`} description={t('lockedUntilMaturity')}>
         <div className="space-y-5">
           <div className="grid grid-cols-3 gap-2 p-1 rounded-full bg-muted">
             {MODES.map((m) => <button key={m.k} disabled={rates[m.k] == null} onClick={() => setMode(m.k)} className={cn('rounded-full py-2 text-sm', mode === m.k ? 'bg-card shadow font-semibold' : 'text-muted-foreground')} data-testid={`button-mode-${m.k}`}>{titleCase(m.k)}</button>)}
@@ -126,13 +126,14 @@ export default function MarketDetailPage() {
           <div className="rounded-3xl vault-card p-5">
             <div className="text-xs uppercase tracking-wider text-white/60">Capital locked now</div>
             <div className="num text-3xl font-semibold mt-1" data-testid="text-cost-preview">{amount(principal)} <span className="text-base text-white/70">{a.currency}</span></div>
-            <div className="text-xs text-white/70 mt-2 num" data-testid="text-estimate">Estimated profit for {dur} {mode}{dur === 1 ? '' : 's'} × {units} unit(s): {amount(estimate)} {a.currency}</div>
-            <div className="text-xs text-white/70 mt-1 num">Total released at maturity: {amount(principal.plus(estimate))} {a.currency}</div>
+            <div className="text-xs text-white/70 mt-2 num" data-testid="text-estimate">{t('estimatedProfit')} {dur} {mode}{dur === 1 ? '' : 's'} × {units} unit(s): {amount(estimate)} {a.currency}</div>
+            <div className="text-xs text-white/70 mt-1 num">{t('totalAtMaturity')}: {amount(principal.plus(estimate))} {a.currency}</div>
             <div className="text-xs text-white/60 mt-2 flex items-center gap-1.5 num"><Wallet className="w-3.5 h-3.5" />Available {amount(bal)} {a.currency}</div>
           </div>
           {short && <p className="text-sm text-destructive">Your available balance does not cover this. <Link href="/wallet?sheet=deposit" className="underline font-medium">Deposit {a.currency}</Link></p>}
           {outOfRange && <p className="text-sm text-amber-600">Duration is outside the allowed window for this listing.</p>}
-          <label className="flex items-start gap-3 rounded-2xl border bg-accent/40 p-3 text-xs leading-relaxed"><input type="checkbox" checked={virtualAccepted} onChange={(e)=>setVirtualAccepted(e.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-primary" data-testid="checkbox-rental-terms" /><span>I understand my capital stays locked for this term. The profit estimate uses the published rate; at maturity my principal is released and the scheduled profit is credited. If I stop early, profit is prorated.</span></label>
+          <div className="text-xs text-muted-foreground">{t('earlyStopProration')}</div>
+          <label className="flex items-start gap-3 rounded-2xl border bg-accent/40 p-3 text-xs leading-relaxed"><input type="checkbox" checked={virtualAccepted} onChange={(e)=>setVirtualAccepted(e.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-primary" data-testid="checkbox-rental-terms" /><span>{t('rentalTermsAck')}</span></label>
           <Button size="lg" className="w-full rounded-full h-14" disabled={pending || !configured || !virtualAccepted || short || outOfRange || units > num(a.available_units)} data-testid="button-confirm-rent"
             onClick={() => run('rent', { asset_id: a.id, billing_mode: mode, duration: dur, units, auto_renew: auto, rental_terms_accepted:true }, { success: 'Rental started', onSuccess: () => { setOpen(false); setVirtualAccepted(false); navigate('/rentals'); } })}>
             {t('confirm')}

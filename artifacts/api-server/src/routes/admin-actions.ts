@@ -11,7 +11,7 @@ import { approveDeposit } from "../lib/deposits";
 
 export const adminActions: IRouter=Router();
 const amountOrZero=(v:unknown)=>amountSchema.parse(String(v));
-const financeActions=["deposit-approve","deposit-reject","deposit-info","withdrawal-approve","withdrawal-reject","withdrawal-sent","withdrawal-retry","reconcile"];
+const financeActions=["deposit-approve","deposit-reject","deposit-info","withdrawal-approve","withdrawal-reject","withdrawal-sent","withdrawal-retry","reconcile","commission-review"];
 const supportActions=["ticket-reply","ticket-update","kyc-request","kyc-review","kyc-document-review","article-save","article-delete"];
 adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
   const u=await requireUser(req,"admin"),action=String(req.params.action),cfg=await config(true);
@@ -256,6 +256,20 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
         const pending=await q("SELECT data FROM platform_records WHERE kind='commission' AND user_id=$1 AND data->>'source_user_id'=$2 AND data->>'status'='pending' FOR UPDATE",[r.user_id,r.referred_id],c);
         for(const {data:p} of pending)await referralCommission(c,p.source_user_id,p.source_id,p.source_value,p.currency,p.source_type);
       }else await q("UPDATE platform_records SET data=jsonb_set(data,'{status}','\"blocked\"') WHERE kind='commission' AND user_id=$1 AND data->>'source_user_id'=$2 AND data->>'status'='pending'",[r.user_id,r.referred_id],c);
+    }else if(action==="commission-review"){
+      const id=str(b.id),decision=z.enum(["pay","block"]).parse(b.decision),reason=str(b.reason,5,2000);
+      const [commission]=await q("SELECT * FROM platform_records WHERE id=$1 AND kind='commission' FOR UPDATE",[id],c);
+      assert(commission,"Commission not found",404);
+      assert(commission.data?.status==="pending","Only pending commissions can be overridden");
+      if(decision==="pay"){
+        const value=amountSchema.parse(String(commission.data.amount));
+        const currency=z.string().regex(/^[A-Z0-9]{2,12}$/).parse(commission.data.currency);
+        const sourceId=str(commission.data.source_id,1,200),level=z.number().int().min(1).max(3).parse(Number(commission.data.level));
+        await move(c,commission.user_id,currency,value,"referral_commission",sourceId,`referral:${sourceId}:${level}`);
+        await event(commission.user_id,"Referral commission earned",`${value} ${currency} was credited after a manual review.`,"commission_earned",c);
+      }
+      await q("UPDATE platform_records SET data=data||$1::jsonb WHERE id=$2 AND kind='commission'",
+        [JSON.stringify({status:decision==="pay"?"paid":"blocked",manual_override:decision,review_reason:reason,reviewed_by:u.id,reviewed_at:new Date().toISOString()}),id],c);
     }else if(action==="user-revoke-sessions"){
       await q("UPDATE login_sessions SET revoked=true WHERE user_id=$1",[str(b.id)],c);
     }else if(action==="user-reset-twofa"){
@@ -320,6 +334,7 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
       const id=b.id?str(b.id):kind==="legal"?`legal-${str(b.key)}-${b.language??"en"}`:uid();
       const clean={...b};delete clean.id;
       if(kind==="article"){str(b.title,2,200);str(b.body,1,100000);str(b.slug,1,200);}
+      if(kind==="announcement"){str(b.title,2,200);str(b.body,1,10000);}
       if(kind==="email_template"){str(b.key,1,100);str(b.subject,1,200);str(b.body_html,1,100000);}
       for(const field of ["body","body_html"]){
         if(typeof clean[field]==="string")clean[field]=sanitizeHtml(clean[field],{

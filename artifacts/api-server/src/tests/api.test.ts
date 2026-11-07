@@ -4,14 +4,14 @@ import { randomBytes } from "node:crypto";
 import type { Server } from "node:http";
 import { pool } from "@workspace/db";
 import app from "../app";
-import { hash, q, uid, transaction, move } from "../lib/platform";
+import { hash, q, uid, transaction, move, record } from "../lib/platform";
 import { ObjectStorageService } from "../lib/objectStorage";
 
 strict.notEqual(process.env.NODE_ENV,"production","API fixtures must never run against a production runtime");
 
 // Full HTTP/SQL boundary checks, without external transfers or global settings changes.
 const people=new Map<string,{id:string;email:string;cookie:string;csrf:string}>();
-let server:Server,origin="",kycId="",fileId="",assetId="",rentalId="",profitAssetId="";
+let server:Server,origin="",kycId="",fileId="",assetId="",rentalId="",profitAssetId="",announcementId="";
 test.before(async()=>{
   await transaction(async c=>{
     for(const role of ["user","superadmin","finance","support"]){
@@ -84,6 +84,12 @@ test("Admin asset editor converts one profit rate into minute, hour, and day rat
   [saved]=await q("SELECT minute_rate,hour_rate,day_rate FROM assets WHERE id=$1",[profitAssetId]);
   strict.equal(saved.minute_rate,"0.100000000000000000");strict.equal(saved.hour_rate,"6.000000000000000000");strict.equal(saved.day_rate,"144.000000000000000000");
 });
+test("Rich announcements are sanitized before saving",async()=>{
+  const r=await request("superadmin","/admin/actions/announcement-save",{title:"Safe announcement",body:"<p>Read <strong>this</strong></p><script>alert(1)</script>",type:"info",active:true});
+  strict.equal(r.status,200);const response:any=await r.json();announcementId=response.id;
+  const [saved]=await q("SELECT data FROM platform_records WHERE id=$1 AND kind='announcement'",[announcementId]);
+  strict.match(saved.data.body,/<strong>this<\/strong>/);strict.doesNotMatch(saved.data.body,/<script|alert\(1\)/i);
+});
 test("CSRF denial happens before mutation",async()=>{
   strict.equal((await request("superadmin","/admin/actions/user-update",{id:people.get("user")!.id,status:"suspended"},false)).status,403);
   const [u]=await q("SELECT status FROM users WHERE id=$1",[people.get("user")!.id]);strict.equal(u.status,"active");
@@ -146,6 +152,23 @@ test("Manual-only withdrawal fixtures reject submission and release their reserv
   strict.equal(wallet.balance,"40.000000000000000000");strict.equal(wallet.locked,"10.000000000000000000");
   const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE ref_id=$1 AND type='withdrawal_rejected'",[id]);strict.equal(n,1);
 });
+test("Finance can manually pay or block one pending referral commission with audit and replay protection",async()=>{
+  const user=people.get("user")!,paidId=uid(),blockedId=uid(),sourceId=uid(),payRequestId=uid(),blockRequestId=uid();
+  await transaction(async c=>{
+    await record("commission",{source_user_id:uid(),source_id:`manual-pay-${sourceId}`,source_value:"25",source_type:"first_deposit",amount:"2.500000000000000000",currency:"USDT",level:1,status:"pending"},user.id,paidId,c);
+    await record("commission",{source_user_id:uid(),source_id:`manual-block-${sourceId}`,source_value:"25",source_type:"first_deposit",amount:"2.500000000000000000",currency:"USDT",level:1,status:"pending"},user.id,blockedId,c);
+  });
+  const pay={id:paidId,decision:"pay",reason:"Verified the referral record",request_id:payRequestId};
+  const [first,replay]=await Promise.all([request("finance","/admin/actions/commission-review",pay),request("finance","/admin/actions/commission-review",pay)]);
+  strict.equal(first.status,200);strict.equal(replay.status,200);strict.deepEqual(await replay.json(),await first.json());
+  strict.equal((await request("finance","/admin/actions/commission-review",{id:blockedId,decision:"block",reason:"Confirmed duplicate account",request_id:blockRequestId})).status,200);
+  const [paid]=await q("SELECT data FROM platform_records WHERE id=$1",[paidId]);strict.equal(paid.data.status,"paid");strict.equal(paid.data.manual_override,"pay");
+  const [blocked]=await q("SELECT data FROM platform_records WHERE id=$1",[blockedId]);strict.equal(blocked.data.status,"blocked");strict.equal(blocked.data.manual_override,"block");
+  const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE idempotency_key=$1",[`${"referral"}:${paid.data.source_id}:1`]);strict.equal(n,1);
+  const [wallet]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1 AND currency='USDT'",[user.id]);
+  strict.equal(wallet.balance,"42.500000000000000000");strict.equal(wallet.locked,"10.000000000000000000");
+  const [{valid}]=await q("SELECT balance=(SELECT sum(amount) FROM ledger WHERE user_id=$1 AND currency='USDT') AS valid FROM wallets WHERE user_id=$1 AND currency='USDT'",[user.id]);strict.equal(valid,true);
+});
 test("A real private upload is owner/reviewer-only until attached as a finance proof",async()=>{
   const bytes=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ9kAAAAASUVORK5CYII=","base64");
   const r=await request("user","/v1/uploads",{name:"isolated-api-regression.png",contentType:"image/png",size:bytes.length});
@@ -178,6 +201,7 @@ test.after(async()=>{
       await q("DELETE FROM withdrawals WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM assets WHERE id=$1",[assetId],c);
       if(profitAssetId)await q("DELETE FROM assets WHERE id=$1",[profitAssetId],c);
+      if(announcementId)await q("DELETE FROM platform_records WHERE id=$1 AND kind='announcement'",[announcementId],c);
       await q("DELETE FROM ledger WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM private_files WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM platform_records WHERE user_id=ANY($1::text[])",[ids],c);

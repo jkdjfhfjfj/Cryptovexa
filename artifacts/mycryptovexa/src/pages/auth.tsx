@@ -12,6 +12,7 @@ import { Turnstile, useCaptchaConfig } from '@/components/app/turnstile';
 
 export function AuthLayout({ title, sub, children, footer }: { title: string; sub?: string; children: ReactNode; footer?: ReactNode }) {
   const { brand } = usePlatform();
+  const { t } = useTranslation();
   return (
     <div className="min-h-[100dvh] grid lg:grid-cols-2 bg-background">
       <div className="hidden lg:flex relative overflow-hidden vault-card p-12 flex-col justify-between">
@@ -20,7 +21,7 @@ export function AuthLayout({ title, sub, children, footer }: { title: string; su
         <div className="relative max-w-md">
           <h2 className="text-4xl font-semibold leading-tight">Rent what you need. Pay for exactly the time you use.</h2>
         </div>
-        <p className="relative text-xs text-white/50">Rentals and crypto carry risk.</p>
+         <p className="relative text-xs text-white/50">{t('risk')}</p>
       </div>
       <div className="flex flex-col justify-center px-6 py-10 sm:px-12">
         <div className="w-full max-w-sm mx-auto rise">
@@ -110,12 +111,21 @@ export function ForgotPage() {
   const { run, pending } = useRun('account');
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
+  const cap = useCaptchaConfig();
+  const [token, setToken] = useState('');
+  const [capReset, setCapReset] = useState(0);
+  const submit = async () => {
+    const result = await run('forgot-password', { email, captcha_token: cap.enabled ? token : undefined }, { success: false });
+    if (result) setSent(true);
+    else if (cap.enabled) { setToken(''); setCapReset((n) => n + 1); }
+  };
   return (
     <AuthLayout title="Reset password" sub="We will email a link valid for one hour." footer={<Link href="/login" className="text-primary font-semibold">Back to sign in</Link>}>
       {sent ? <div className="rounded-2xl bg-accent p-4 text-sm flex gap-2"><CheckCircle2 className="w-5 h-5 text-primary shrink-0" />If an account exists for {email}, a reset link is on its way.</div> : (
-        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); run('forgot-password', { email }, { success: false, onSuccess: () => setSent(true) }); }}>
+        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <Field icon={Mail} label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} data-testid="input-email" />
-          <Button type="submit" className="w-full h-12 rounded-full" disabled={pending || !email} data-testid="button-send-reset">Send link</Button>
+          {cap.enabled && <Turnstile siteKey={cap.siteKey} onToken={setToken} resetKey={capReset} />}
+          <Button type="submit" className="w-full h-12 rounded-full" disabled={pending || !email || (cap.enabled && !token)} data-testid="button-send-reset">Send link</Button>
         </form>
       )}
     </AuthLayout>

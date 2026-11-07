@@ -127,7 +127,8 @@ export function AdminHelp() {
         {ann && (
           <div className="space-y-3">
             <Input placeholder="Title" value={String(ann.title)} onChange={(e) => setAnn({ ...ann, title: e.target.value })} className="rounded-xl" data-testid="input-ann-title" />
-            <Textarea placeholder="Body" value={String(ann.body)} onChange={(e) => setAnn({ ...ann, body: e.target.value })} className="rounded-xl" data-testid="input-ann-body" />
+            <RichTextEditor id="announcement-body" testId="input-ann-body" label="Announcement body" value={String(ann.body ?? '')} onChange={(body) => setAnn({ ...ann, body })} minHeight={180} />
+            <details className="rounded-xl border p-3"><summary className="text-xs cursor-pointer">Preview</summary><div className="prose prose-sm dark:prose-invert mt-2" dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(String(ann.body ?? '')) }} /></details>
             <Select value={String(ann.type)} onValueChange={(v) => setAnn({ ...ann, type: v })}><SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger><SelectContent>{['info', 'warning', 'status', 'promo'].map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
             <div className="grid grid-cols-2 gap-2"><div><Label className="text-xs">Start</Label><Input type="datetime-local" value={String(ann.start || '')} onChange={(e) => setAnn({ ...ann, start: e.target.value })} className="rounded-xl mt-1" /></div><div><Label className="text-xs">End</Label><Input type="datetime-local" value={String(ann.end || '')} onChange={(e) => setAnn({ ...ann, end: e.target.value })} className="rounded-xl mt-1" /></div></div>
             <label className="flex items-center justify-between text-sm">Active<Switch checked={!!ann.active} onCheckedChange={(v) => setAnn({ ...ann, active: v })} /></label>

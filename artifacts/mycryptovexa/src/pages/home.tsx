@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'wouter';
 import { useTranslation } from 'react-i18next';
+import { sanitizeRichHtml } from '@/components/app/rich-text-editor';
 import { ArrowDownToLine, ArrowUpFromLine, Store, UserPlus, LifeBuoy, ShieldAlert, Megaphone, ChevronRight, Timer, Eye, EyeOff } from 'lucide-react';
 import { Carousel, CarouselContent, CarouselItem } from '@/components/ui/carousel';
 import { usePlatform, list } from '@/lib/platform';
@@ -109,7 +110,7 @@ export default function HomePage() {
               <CarouselItem key={String(a.id)} className="md:basis-1/2">
                 <div className="rounded-3xl border bg-card p-5 flex gap-4 h-full" data-testid={`card-announcement-${a.id}`}>
                   <div className="w-10 h-10 rounded-xl bg-secondary grid place-items-center shrink-0"><Megaphone className="w-5 h-5" /></div>
-                  <div><div className="flex items-center gap-2"><h3 className="font-semibold">{a.title}</h3><StatusChip status={a.type === 'warning' ? 'pending' : 'submitted'} /></div><p className="text-sm text-muted-foreground mt-1">{a.body}</p></div>
+                  <div className="min-w-0"><div className="flex items-center gap-2"><h3 className="font-semibold">{a.title}</h3><StatusChip status={a.type === 'warning' ? 'pending' : 'submitted'} /></div><div className="prose prose-sm dark:prose-invert max-w-none mt-1 text-sm text-muted-foreground" dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(String(a.body ?? '')) }} /></div>
                 </div>
               </CarouselItem>
             ))}

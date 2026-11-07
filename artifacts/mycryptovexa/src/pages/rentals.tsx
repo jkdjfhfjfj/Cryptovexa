@@ -43,14 +43,14 @@ export default function RentalsPage() {
         <div className="min-w-0">
           <Link href={`/market/${r.asset_id}`} className="font-semibold hover:text-primary">{r.asset_title}</Link>
           <p className="text-xs text-muted-foreground mt-0.5 num">{when(r.start_at)} → {r.end_at ? when(r.end_at) : 'open-ended'}</p>
-          <p className="text-xs text-muted-foreground num">{profitRental ? 'Profit rate' : 'Rental rate'}: {amount(r.rate_snapshot)} per {r.billing_mode} × {num(r.units || 1)} unit(s)</p>
+          <p className="text-xs text-muted-foreground num">{profitRental ? t('profitRateLabel') : 'Rental rate'}: {amount(r.rate_snapshot)} per {r.billing_mode} × {num(r.units || 1)} unit(s)</p>
         </div>
         <StatusChip status={r.status} />
       </div>
       {profitRental && <div className="grid grid-cols-3 gap-2 mt-4 text-xs">
         <div className="rounded-xl bg-muted p-3"><div className="text-muted-foreground">Principal locked</div><div className="num font-semibold mt-1">{amount(principal)} {r.currency}</div></div>
-        <div className="rounded-xl bg-muted p-3"><div className="text-muted-foreground">Term profit</div><div className="num font-semibold mt-1">{amount(estimate)} {r.currency}</div></div>
-        <div className="rounded-xl bg-muted p-3"><div className="text-muted-foreground">Profit paid</div><div className="num font-semibold mt-1">{amount(paid)} {r.currency}</div></div>
+        <div className="rounded-xl bg-muted p-3"><div className="text-muted-foreground">{t('termProfit')}</div><div className="num font-semibold mt-1">{amount(estimate)} {r.currency}</div></div>
+        <div className="rounded-xl bg-muted p-3"><div className="text-muted-foreground">{t('paidProfit')}</div><div className="num font-semibold mt-1">{amount(paid)} {r.currency}</div></div>
       </div>}
       <div className="mt-4"><RentalClock r={r} /></div>
       <div className="mt-4 flex flex-wrap gap-2 items-center">
@@ -85,7 +85,7 @@ export default function RentalsPage() {
 
       <AlertDialog open={!!stopId} onOpenChange={(o) => !o && setStopId(null)}>
         <AlertDialogContent className="rounded-3xl">
-          <AlertDialogHeader><AlertDialogTitle>Stop {stopId?.asset_title}?</AlertDialogTitle><AlertDialogDescription>{Number(stopId?.rental_model_version) === 2 ? 'Your locked principal will be released and profit prorated through the stop time. Any already settled term profits stay credited.' : `Unused prepaid time is refunded minus the early-stop penalty of ${num((settings.billing as R)?.early_stop_penalty_percent ?? (settings.billing as R)?.penalty_percent)}%. This cannot be undone.`}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogHeader><AlertDialogTitle>Stop {stopId?.asset_title}?</AlertDialogTitle><AlertDialogDescription>{Number(stopId?.rental_model_version) === 2 ? `${t('earlyStopProration')} Any already settled term profits stay credited.` : `Unused prepaid time is refunded minus the early-stop penalty of ${num((settings.billing as R)?.early_stop_penalty_percent ?? (settings.billing as R)?.penalty_percent)}%. This cannot be undone.`}</AlertDialogDescription></AlertDialogHeader>
           <AlertDialogFooter><AlertDialogCancel className="rounded-full">{t('cancel')}</AlertDialogCancel><AlertDialogAction className="rounded-full bg-destructive" data-testid="button-confirm-stop" onClick={() => stopId && run('rental-stop', { id: stopId.id }, { success: 'Rental stopped' })}>{t('stop')}</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

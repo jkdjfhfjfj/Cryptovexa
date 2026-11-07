@@ -114,6 +114,7 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
     await event(u.id,"New sign-in","A device signed in to your account. Review active sessions if this was not you.","new_login");
     result={success:true,message:"Welcome back",user:safeUser(u)};
   } else if(action==="forgot-password") {
+    await verifyCaptcha(req,cfg);
     const email=z.string().email().parse(b.email).toLowerCase();
     const [u]=await q("SELECT * FROM users WHERE email=$1",[email]);
     if(u){const code=await token(u.id,"reset");await event(u.id,"Reset your password","Your reset link expires in one hour.","password_reset",undefined,{token:code,path:"/reset-password",origin:linkOrigin});}

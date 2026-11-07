@@ -2,11 +2,12 @@ import test from "node:test";
 import strict from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { pool } from "@workspace/db";
-import { q, uid, move, amount, encrypt, decrypt, putSetting, config, record, transaction, replayRequest, accountAllowedInEnvironment, defaultSettings, defaultEmailTemplateBody } from "../lib/platform";
+import { q, uid, move, amount, encrypt, decrypt, putSetting, config, record, event, transaction, replayRequest, accountAllowedInEnvironment, defaultSettings, defaultEmailTemplateBody } from "../lib/platform";
 import { startRental, stopRental, billRental, extendRental } from "../lib/rentals";
 import { approveDeposit } from "../lib/deposits";
 import { referralCommission, settleWithdrawal, deliverQueuedEmail, findVerifiedBinanceDeposit, creditVerifiedBinanceDeposit, binanceNetworkCode, renderEmailMessage } from "../lib/services";
 import { reviewDocuments } from "../lib/verification";
+import { verifyCaptcha } from "../lib/captcha";
 
 strict.notEqual(process.env.NODE_ENV,"production","Financial fixtures must never run against a production runtime");
 
@@ -25,6 +26,11 @@ test("Default preview accounts cannot authenticate in production",()=>{
   strict.equal(accountAllowedInEnvironment(preview,"production"),false);
   strict.equal(accountAllowedInEnvironment(operator,"production"),true);
   strict.equal(accountAllowedInEnvironment(null,"production"),false);
+});
+test("Enabled CAPTCHA fails closed when the challenge token or provider keys are missing",async()=>{
+  const req={body:{},ip:"127.0.0.1",get:()=>undefined,hostname:"test.invalid"} as any;
+  await strict.rejects(verifyCaptcha(req,{captcha_enabled:true,captcha_site_key:"site",captcha_secret:"secret"}),/Complete the security challenge/);
+  await strict.rejects(verifyCaptcha(req,{captcha_enabled:true}),/not fully configured/);
 });
 test("Money validation rejects floats, exponents, negatives and zero",()=>{
   for(const n of [0.1,1,"1e3","-1","0","0.000","NaN","1.1234567890123456789"])strict.throws(()=>amount(n));
@@ -244,6 +250,16 @@ test("Suspicious referrals remain pending until an explicit allow review",async(
     await q("UPDATE platform_records SET data=data||'{\"review_decision\":\"allow\"}'::jsonb WHERE id=$1",[ref],c);
     await referralCommission(c,u.id,source,"10","USDT","first_deposit");
     const [w]=await q("SELECT balance FROM wallets WHERE user_id=$1",[parent],c);strict.equal(w.balance,"1.000000000000000000");
+  });
+});
+test("Configured alert recipients receive routed email records and optional Telegram is queued",async()=>{
+  await sandbox(async(c,u)=>{
+    await putSetting("notifications",{deposit_alert_emails:["ops@example.invalid"],telegram_chat_id:"-100123456"},false,c);
+    await event(u.id,"Deposit review","Private review details","deposit_submitted",c);
+    const [{n:emailCount}]=await q(`SELECT count(*)::integer AS n FROM email_logs WHERE "to"='ops@example.invalid' AND template='admin_deposit_submitted'`,[],c);
+    strict.equal(emailCount,1);
+    const [{n:telegramCount}]=await q("SELECT count(*)::integer AS n FROM platform_records WHERE kind='telegram_outbox' AND data->>'title'='Deposit review' AND data->>'status'='queued'",[],c);
+    strict.equal(telegramCount,1);
   });
 });
 test("KYC decisions preserve private file references and require rejection reasons",()=>{
