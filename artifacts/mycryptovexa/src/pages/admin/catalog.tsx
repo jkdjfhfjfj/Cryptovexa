@@ -85,7 +85,7 @@ function AssetEditor({ a, onDone }: { a: R | null; onDone: () => void }) {
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
         <Select value={f.type} onValueChange={(v) => set('type', v)}><SelectTrigger className="rounded-xl" data-testid="select-asset-type"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="property">Property</SelectItem><SelectItem value="machine">Machine</SelectItem></SelectContent></Select>
-        <Select value={f.status} onValueChange={(v) => set('status', v)}><SelectTrigger className="rounded-xl" data-testid="select-asset-status"><SelectValue /></SelectTrigger><SelectContent>{['active', 'maintenance', 'inactive'].map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
+        <Select value={f.status} onValueChange={(v) => set('status', v)}><SelectTrigger className="rounded-xl" data-testid="select-asset-status"><SelectValue /></SelectTrigger><SelectContent>{['active', 'coming_soon', 'maintenance', 'inactive'].map((s) => <SelectItem key={s} value={s}>{s.replace('_', ' ')}</SelectItem>)}</SelectContent></Select>
       </div>
       <Input placeholder="Title" value={f.title} onChange={(e) => set('title', e.target.value)} className="rounded-xl" data-testid="input-asset-title" />
       <Textarea placeholder="Description" rows={3} value={f.description} onChange={(e) => set('description', e.target.value)} className="rounded-xl" data-testid="input-asset-description" />

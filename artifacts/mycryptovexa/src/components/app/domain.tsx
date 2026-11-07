@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type SyntheticEvent } from 'react';
 import { Link } from 'wouter';
 import { Building2, Cpu, MapPin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -15,7 +15,14 @@ const ASSET_FALLBACK: Record<string, string> = {
 
 export const assetImage = (a: R) => {
   const img = Array.isArray(a.images) ? a.images[0] : undefined;
-  return img ? fileUrl(String(img)) : ASSET_FALLBACK[String(a.id)] || '/images/hero-vault.jpg';
+  return img ? fileUrl(String(img)) : ASSET_FALLBACK[String(a.id)] || assetImageFallback(a);
+};
+export const assetImageFallback = (a: R) => a.type === 'machine' ? '/images/auth-lattice.jpg' : '/images/hero-vault.jpg';
+const recoverAssetImage = (event: SyntheticEvent<HTMLImageElement>, a: R) => {
+  const image = event.currentTarget;
+  if (image.dataset.fallbackApplied === 'true') return;
+  image.dataset.fallbackApplied = 'true';
+  image.src = assetImageFallback(a);
 };
 
 export function useNow(ms = 1000) {
@@ -32,30 +39,39 @@ export function AssetCard({ a, i = 0 }: { a: R; i?: number }) {
   const rates = (a.rates as R) || {};
   const Icon = a.type === 'machine' ? Cpu : Building2;
   const configured = Boolean(a.profit_model_configured);
+  const comingSoon = a.status === 'coming_soon';
   return (
     <Link href={`/market/${a.id}`} className="group rounded-3xl border bg-card overflow-hidden press hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 rise block" style={{ animationDelay: `${i * 40}ms` }} data-testid={`card-asset-${a.id}`}>
       <div className="relative aspect-[4/3] overflow-hidden bg-muted">
-        <img src={assetImage(a)} alt={String(a.title)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" loading="lazy" />
+        <img src={assetImage(a)} alt={String(a.title)} onError={(event) => recoverAssetImage(event, a)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" loading="lazy" data-testid={`img-asset-card-${a.id}`} />
         <div className="absolute top-3 start-3 flex items-center gap-1.5 rounded-full bg-[#0B1A2E]/80 text-white text-[11px] px-2.5 py-1 backdrop-blur">
           <Icon className="w-3.5 h-3.5" />Virtual · {a.category || a.type}
         </div>
-        <div className="absolute top-3 end-3"><StatusChip status={!configured ? 'terms_pending' : num(a.available_units) > 0 ? a.status || 'available' : 'unavailable'} className="bg-card/90" /></div>
+        <div className="absolute top-3 end-3"><StatusChip status={comingSoon ? 'coming_soon' : !configured ? 'terms_pending' : num(a.available_units) > 0 ? a.status || 'available' : 'unavailable'} className="bg-card/90" /></div>
       </div>
       <div className="p-4">
         <h3 className="font-semibold leading-snug line-clamp-1">{a.title}</h3>
         {a.location && <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1"><MapPin className="w-3 h-3" />{a.location}</p>}
-        <div className="mt-3 grid grid-cols-3 gap-1.5 text-center">
-          {(['minute', 'hour', 'day'] as const).map((m) => (
-            <div key={m} className="rounded-xl bg-muted/70 py-1.5">
-               <div className="num text-sm font-semibold">{rates[m] != null ? amount(rates[m]) : '—'}</div>
-               <div className="text-[10px] text-muted-foreground">profit / {t(m === 'minute' ? 'perMinute' : m === 'hour' ? 'perHour' : 'perDay')}</div>
+        {comingSoon ? (
+          <div className="mt-3 rounded-xl bg-muted/70 px-3 py-3 text-xs text-muted-foreground" data-testid={`text-coming-soon-${a.id}`}>
+            Pricing and rental terms are being prepared. Booking is not open yet.
+          </div>
+        ) : (
+          <>
+            <div className="mt-3 grid grid-cols-3 gap-1.5 text-center">
+              {(['minute', 'hour', 'day'] as const).map((m) => (
+                <div key={m} className="rounded-xl bg-muted/70 py-1.5">
+                   <div className="num text-sm font-semibold">{rates[m] != null ? amount(rates[m]) : '—'}</div>
+                   <div className="text-[10px] text-muted-foreground">profit / {t(m === 'minute' ? 'perMinute' : m === 'hour' ? 'perHour' : 'perDay')}</div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <div className="mt-3 flex justify-between text-xs text-muted-foreground">
-          <span className="num">{configured ? `Capital ${amount(a.capital_required)} ${a.currency}` : 'Rental terms not set'}</span>
-          <span className="num">{num(a.available_units)}/{num(a.total_units)} {t('available')}</span>
-        </div>
+            <div className="mt-3 flex justify-between text-xs text-muted-foreground">
+              <span className="num">{configured ? `Capital ${amount(a.capital_required)} ${a.currency}` : 'Rental terms not set'}</span>
+              <span className="num">{num(a.available_units)}/{num(a.total_units)} {t('available')}</span>
+            </div>
+          </>
+        )}
       </div>
     </Link>
   );

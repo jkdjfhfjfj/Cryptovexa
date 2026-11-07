@@ -46,7 +46,7 @@ async function baseState(admin=false){
     settings.notifications={...settings.notifications,telegram_bot_token_configured:settings.telegram_bot_token_configured};
   }
   const prices=await marketRates();
-  return {settings,assets:(await q(`SELECT * FROM assets ${admin?"":"WHERE status='active'"} ORDER BY created_at`)).map(assetView),
+  return {settings,assets:(await q(`SELECT * FROM assets ${admin?"":"WHERE status IN ('active','coming_soon')"} ORDER BY created_at`)).map(assetView),
     currencies:(await getRecords("currency")).map(c=>({...c,usd_price:prices[c.code]??null})),articles:(await getRecords("article")).filter(a=>admin||a.published),
     announcements:(await getRecords("announcement")).filter(a=>admin||(a.active&&(!a.start||new Date(a.start).getTime()<=Date.now())&&(!a.end||new Date(a.end).getTime()>Date.now()))),
     legalPages:(await getRecords("legal")).map(l=>({...l,body:String(l.body??"").replaceAll("{{site_name}}",String(cfg.site_name).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!)))}))};

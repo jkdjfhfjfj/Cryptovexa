@@ -25,12 +25,16 @@ export default function MarketPage() {
     let r = assets.filter((a) => a.status !== 'disabled');
     if (type !== 'all') r = r.filter((a) => a.type === type);
     if (cat !== 'all') r = r.filter((a) => a.category === cat);
-    if (onlyAvail) r = r.filter((a) => num(a.available_units) > 0);
-    if (maxHour) r = r.filter((a) => D((a.rates as Record<string, unknown>)?.hour).lte(D(maxHour)));
+    if (onlyAvail) r = r.filter((a) => a.status === 'active' && num(a.available_units) > 0);
+    if (maxHour) r = r.filter((a) => a.status === 'active' && Boolean(a.profit_model_configured) && D((a.rates as Record<string, unknown>)?.hour).lte(D(maxHour)));
     if (q) { const s = q.toLowerCase(); r = r.filter((a) => `${a.title} ${a.location} ${a.description}`.toLowerCase().includes(s)); }
     const rate = (a: Record<string, unknown>) => D((a.rates as Record<string, unknown>)?.hour);
-    if (sort === 'low') r = [...r].sort((a, b) => rate(a).comparedTo(rate(b)));
-    if (sort === 'high') r = [...r].sort((a, b) => rate(b).comparedTo(rate(a)));
+    if (sort === 'low' || sort === 'high') r = [...r].sort((a, b) => {
+      const configuredA = Boolean(a.profit_model_configured), configuredB = Boolean(b.profit_model_configured);
+      if (configuredA !== configuredB) return configuredA ? -1 : 1;
+      const comparison = rate(a).comparedTo(rate(b));
+      return sort === 'low' ? comparison : -comparison;
+    });
     return r;
   }, [assets, type, cat, onlyAvail, maxHour, q, sort]);
 

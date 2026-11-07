@@ -30,7 +30,7 @@ export default function HomePage() {
   const rentals = list(state.rentals).filter((r) => r.status === 'active' || r.status === 'paused');
   const announcements = list(state.announcements).filter((a) => a.active !== false);
   const kycOpen = user && (user.kyc_status === 'requested' || user.kyc_status === 'rejected');
-  const assets = list(state.assets).filter((a) => a.status !== 'disabled').slice(0, 4);
+  const assets = list(state.assets).filter((a) => a.status !== 'disabled').slice(0, 15);
 
   const quick = [
     { href: '/wallet?sheet=deposit', icon: ArrowDownToLine, label: t('deposit') },

@@ -9,7 +9,7 @@ import { usePlatform, list, useRun } from '@/lib/platform';
 import { fileUrl, type R } from '@/lib/api';
 import { amount, num, titleCase, D, dmax0 } from '@/lib/format';
 import { PageSkeleton, ErrorState, EmptyState, StatusChip, ActionSheet, SignInPrompt } from '@/components/app/kit';
-import { assetImage } from '@/components/app/domain';
+import { assetImage, assetImageFallback } from '@/components/app/domain';
 import { cn } from '@/lib/utils';
 
 const MODES = [
@@ -41,6 +41,7 @@ export default function MarketDetailPage() {
   const images: string[] = Array.isArray(a.images) && a.images.length ? a.images.map((x: unknown) => fileUrl(String(x))) : [assetImage(a)];
   const specs = Object.entries((a.specs as R) || {});
   const configured = Boolean(a.profit_model_configured);
+  const comingSoon = a.status === 'coming_soon';
   const rate = D(rates[mode]);
   const principal = D(a.capital_required).times(units);
   const estimate = rate.times(dur).times(units);
@@ -57,7 +58,7 @@ export default function MarketDetailPage() {
       <button onClick={() => navigate('/market')} className="flex items-center gap-1.5 text-sm text-muted-foreground mb-4 hover:text-foreground" data-testid="button-back"><ArrowLeft className="w-4 h-4 rtl:rotate-180" />{t('market')}</button>
       <div className="grid lg:grid-cols-[1.3fr_1fr] gap-6">
         <div className="rise">
-          <div className="rounded-[28px] overflow-hidden aspect-[4/3] bg-muted"><img src={images[img]} alt={String(a.title)} className="w-full h-full object-cover" data-testid="img-asset" /></div>
+          <div className="rounded-[28px] overflow-hidden aspect-[4/3] bg-muted"><img src={images[img]} alt={String(a.title)} onError={(event) => { const image = event.currentTarget; if (image.dataset.fallbackApplied !== 'true') { image.dataset.fallbackApplied = 'true'; image.src = assetImageFallback(a); } }} className="w-full h-full object-cover" data-testid="img-asset" /></div>
           {images.length > 1 && (
             <div className="flex gap-2 mt-3 overflow-x-auto no-scrollbar">
               {images.map((src, i) => <button key={src + i} onClick={() => setImg(i)} className={cn('w-20 h-16 rounded-xl overflow-hidden border-2 shrink-0', i === img ? 'border-primary' : 'border-transparent opacity-70')} data-testid={`button-thumb-${i}`}><img src={src} alt="" className="w-full h-full object-cover" /></button>)}
@@ -80,31 +81,40 @@ export default function MarketDetailPage() {
           <div className="flex items-center gap-2 text-sm text-muted-foreground"><Icon className="w-4 h-4" />{titleCase(String(a.type))} · {a.category}</div>
           <h1 className="text-3xl font-semibold tracking-tight" data-testid="text-asset-title">{a.title}</h1>
           {a.location && <p className="flex items-center gap-1.5 text-sm"><MapPin className="w-4 h-4 text-primary" />{a.location}</p>}
-          <div className="flex items-center gap-3"><StatusChip status={!configured ? 'terms_pending' : num(a.available_units) > 0 ? 'available' : 'unavailable'} /><span className="text-sm num">{num(a.available_units)} of {num(a.total_units)} units free</span></div>
-          <div className="grid grid-cols-3 gap-2">
-            {MODES.map((m) => (
-              <button key={m.k} onClick={() => { setMode(m.k); if (user) setOpen(true); }} disabled={!configured || rates[m.k] == null} data-testid={`card-rate-${m.k}`}
-                className="press rounded-3xl border bg-card p-4 text-start hover:border-primary disabled:opacity-40">
-                <m.icon className="w-5 h-5 text-primary" />
-                <div className="num text-xl font-semibold mt-3">{rates[m.k] != null ? amount(rates[m.k]) : '—'}</div>
-                <div className="text-xs text-muted-foreground">{a.currency} profit / {t(m.label)}</div>
-              </button>
-            ))}
-          </div>
-          <div className="rounded-2xl border bg-card p-4 text-sm">
-            <div className="flex justify-between gap-3"><span className="text-muted-foreground">{t('capitalRequired')}</span><span className="num font-medium">{configured ? amount(a.capital_required) : 'Not configured'} {configured ? a.currency : ''}</span></div>
-            {!configured && <p className="text-xs text-amber-600 mt-2">The administrator must set capital and profit terms before this rental can start.</p>}
-          </div>
-          {(minD > 0 || maxD > 0) && <p className="text-xs text-muted-foreground">Duration window: {minD || 1} to {maxD || 'unlimited'} minutes.</p>}
-          {user ? (
-            <Button size="lg" className="w-full rounded-full h-14 text-base" disabled={!configured || num(a.available_units) <= 0} onClick={() => setOpen(true)} data-testid="button-open-rent">{t('rent')} {a.title}</Button>
+          <div className="flex items-center gap-3"><StatusChip status={comingSoon ? 'coming_soon' : !configured ? 'terms_pending' : num(a.available_units) > 0 ? 'available' : 'unavailable'} />{!comingSoon && <span className="text-sm num">{num(a.available_units)} of {num(a.total_units)} units free</span>}</div>
+          {comingSoon ? (
+            <div className="rounded-2xl border bg-card p-4 text-sm" data-testid={`text-coming-soon-detail-${a.id}`}>
+              <p className="font-semibold">Coming soon</p>
+              <p className="text-muted-foreground mt-1">Pricing and rental terms are being prepared. This listing cannot be booked yet.</p>
+            </div>
           ) : (
-            <SignInPrompt body="Create an account and fund your wallet to rent this listing." />
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                {MODES.map((m) => (
+                  <button key={m.k} onClick={() => { setMode(m.k); if (user) setOpen(true); }} disabled={!configured || rates[m.k] == null} data-testid={`card-rate-${m.k}`}
+                    className="press rounded-3xl border bg-card p-4 text-start hover:border-primary disabled:opacity-40">
+                    <m.icon className="w-5 h-5 text-primary" />
+                    <div className="num text-xl font-semibold mt-3">{rates[m.k] != null ? amount(rates[m.k]) : '—'}</div>
+                    <div className="text-xs text-muted-foreground">{a.currency} profit / {t(m.label)}</div>
+                  </button>
+                ))}
+              </div>
+              <div className="rounded-2xl border bg-card p-4 text-sm">
+                <div className="flex justify-between gap-3"><span className="text-muted-foreground">{t('capitalRequired')}</span><span className="num font-medium">{configured ? amount(a.capital_required) : 'Not configured'} {configured ? a.currency : ''}</span></div>
+                {!configured && <p className="text-xs text-amber-600 mt-2">The administrator must set capital and profit terms before this rental can start.</p>}
+              </div>
+              {(minD > 0 || maxD > 0) && <p className="text-xs text-muted-foreground">Duration window: {minD || 1} to {maxD || 'unlimited'} minutes.</p>}
+              {user ? (
+                <Button size="lg" className="w-full rounded-full h-14 text-base" disabled={!configured || a.status !== 'active' || num(a.available_units) <= 0} onClick={() => setOpen(true)} data-testid="button-open-rent">{t('rent')} {a.title}</Button>
+              ) : (
+                <SignInPrompt body="Create an account and fund your wallet to rent this listing." />
+              )}
+            </>
           )}
         </div>
       </div>
 
-      <ActionSheet open={open} onOpenChange={(value)=>{setOpen(value);if(!value)setVirtualAccepted(false);}} title={`${t('rent')} ${a.title}`} description={t('lockedUntilMaturity')}>
+      {!comingSoon && <ActionSheet open={open} onOpenChange={(value)=>{setOpen(value);if(!value)setVirtualAccepted(false);}} title={`${t('rent')} ${a.title}`} description={t('lockedUntilMaturity')}>
         <div className="space-y-5">
           <div className="grid grid-cols-3 gap-2 p-1 rounded-full bg-muted">
             {MODES.map((m) => <button key={m.k} disabled={rates[m.k] == null} onClick={() => setMode(m.k)} className={cn('rounded-full py-2 text-sm', mode === m.k ? 'bg-card shadow font-semibold' : 'text-muted-foreground')} data-testid={`button-mode-${m.k}`}>{titleCase(m.k)}</button>)}
@@ -139,7 +149,7 @@ export default function MarketDetailPage() {
             {t('confirm')}
           </Button>
         </div>
-      </ActionSheet>
+      </ActionSheet>}
     </div>
   );
 }

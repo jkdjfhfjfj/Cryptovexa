@@ -80,6 +80,15 @@ async function profitRentalFixture(c:any,u:any,mode="minute",duration=3,autoRene
     [id,JSON.stringify({capital_required:capital,profit_rate_basis:"hour",profit_rate_value:"5"})],c);
   return startRental(u,{asset_id:id,billing_mode:mode,duration,units:1,auto_renew:autoRenew},c);
 }
+test("Coming-soon assets stay visible without becoming rentable",async()=>{
+  await sandbox(async(c,u)=>{
+    const id=uid();
+    await q(`INSERT INTO assets(id,type,title,description,location,category,status,total_units,available_units,currency,minute_rate,hour_rate,day_rate,data)
+      VALUES($1,'machine','Coming soon fixture','Test only','Test only','Test only','coming_soon',1,1,'USDT','1','5','20',$2::jsonb)`,
+      [id,JSON.stringify({capital_required:"10",profit_rate_basis:"hour",profit_rate_value:"5"})],c);
+    await strict.rejects(startRental(u,{asset_id:id,billing_mode:"hour",duration:1,units:1},c),/This asset is unavailable/);
+  });
+});
 test("Maturity releases principal and credits the snapshotted profit once",async()=>{
   await sandbox(async(c,u)=>{
     const r=await profitRentalFixture(c,u),clock=new Date(new Date(r.end_at).getTime()+60000);

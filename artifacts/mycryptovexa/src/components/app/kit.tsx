@@ -44,7 +44,7 @@ const TONE: Record<string, string> = {
   slate: 'bg-muted text-muted-foreground border-border',
 };
 const MAP: Record<string, string> = {
-  pending: 'amber', pending_review: 'amber', pending_confirm: 'amber', queued: 'amber', processing: 'blue', requested: 'amber', submitted: 'blue', open: 'amber', awaiting_user: 'blue', manual_fallback: 'amber', paused: 'amber', needs_info: 'blue', draft: 'slate',
+  pending: 'amber', pending_review: 'amber', pending_confirm: 'amber', queued: 'amber', processing: 'blue', requested: 'amber', submitted: 'blue', open: 'amber', awaiting_user: 'blue', manual_fallback: 'amber', paused: 'amber', needs_info: 'blue', draft: 'slate', coming_soon: 'blue',
   approved: 'green', active: 'green', sent: 'green', completed: 'green', credited: 'green', resolved: 'green', published: 'green', available: 'green', paid: 'green', verified: 'green', success: 'green',
   rejected: 'red', failed: 'red', cancelled: 'red', suspended: 'red', closed: 'slate', disabled: 'slate', none: 'slate', expired: 'red',
 };

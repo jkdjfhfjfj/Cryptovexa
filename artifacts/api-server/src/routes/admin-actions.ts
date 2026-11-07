@@ -175,7 +175,7 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
         (CASE WHEN $1='minute' THEN $2::numeric*60 WHEN $1='hour' THEN $2::numeric ELSE round($2::numeric/24,18) END)::text AS hour,
         (CASE WHEN $1='minute' THEN $2::numeric*1440 WHEN $1='hour' THEN $2::numeric*24 ELSE $2::numeric END)::text AS day,
         $3::numeric>0 AS "validCapital",$2::numeric>0 AS "validRate"`,[basis,submittedRate,capital],c);
-      const status=z.enum(["active","inactive","maintenance"]).parse(b.status??"active");
+      const status=z.enum(["active","inactive","maintenance","coming_soon"]).parse(b.status??"active");
       assert(status!=="active"||(validCapital&&validRate),"Active assets need required capital and a positive profit rate");
       const [existing]=await q("SELECT * FROM assets WHERE id=$1 FOR UPDATE",[id],c);
       const reserved=existing?existing.total_units-existing.available_units:0;
