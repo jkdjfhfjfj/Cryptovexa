@@ -19,16 +19,14 @@ export function AuthLayout({ title, sub, children, footer }: { title: string; su
         <div className="relative"><Link href="/"><Logo name={brand.name} logo={brand.logo} size={36} /></Link></div>
         <div className="relative max-w-md">
           <h2 className="text-4xl font-semibold leading-tight">Rent what you need. Pay for exactly the time you use.</h2>
-          <p className="text-white/70 mt-4">Virtual rentals inside the app, crypto-funded balances and a person reviewing every deposit. No physical property or hardware access is included.</p>
         </div>
-        <p className="relative text-xs text-white/50">Rentals and crypto carry risk. Returns are never guaranteed.</p>
+        <p className="relative text-xs text-white/50">Rentals and crypto carry risk.</p>
       </div>
       <div className="flex flex-col justify-center px-6 py-10 sm:px-12">
         <div className="w-full max-w-sm mx-auto rise">
           <Link href="/" className="lg:hidden mb-8 inline-block"><Logo name={brand.name} logo={brand.logo} size={32} /></Link>
           <h1 className="text-3xl font-semibold tracking-tight">{title}</h1>
           {sub && <p className="text-muted-foreground text-sm mt-1.5">{sub}</p>}
-          <p className="mt-3 text-xs text-muted-foreground">Virtual in-app rentals only. Fees do not provide access to real buildings or machines, or investment returns.</p>
           <div className="mt-7">{children}</div>
           {footer && <div className="mt-6 text-sm text-muted-foreground">{footer}</div>}
         </div>
