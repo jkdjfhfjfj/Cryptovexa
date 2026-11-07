@@ -68,3 +68,9 @@ export const maskEmail = (e?: string) => {
 };
 
 export const titleCase = (s?: string) => (s || '').replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+/** Keep storage/audit event names stable while showing user-friendly ledger terminology. */
+export const ledgerLabel = (value: unknown) => {
+  const label = String(value ?? '').replace(/_/g, ' ');
+  return label === 'admin adjustment' ? 'Balance adjustment' : label;
+};

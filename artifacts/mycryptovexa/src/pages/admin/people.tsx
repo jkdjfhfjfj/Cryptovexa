@@ -11,7 +11,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { list, useRun } from '@/lib/platform';
 import { fileUrl, type R } from '@/lib/api';
-import { amount, when, num, titleCase, maskEmail } from '@/lib/format';
+import { amount, when, num, titleCase, maskEmail, ledgerLabel } from '@/lib/format';
 import { StatusChip, ActionSheet, EmptyState } from '@/components/app/kit';
 import { useAdmin, DataTable, AdminTitle, userLabel } from './shell';
 import { usePrompt, Section } from './parts';
@@ -51,7 +51,7 @@ function UserDetail({ u, onClose }: { u: R; onClose: () => void }) {
         <TabsContent value="money" className="space-y-3 pt-2">
           <div className="grid grid-cols-2 gap-2">{wallets.length ? wallets.map((w) => <div key={String(w.currency)} className="rounded-2xl border p-3"><div className="text-xs text-muted-foreground">{w.currency}</div><div className="num font-semibold">{amount(w.balance)}</div><div className="num text-[11px] text-muted-foreground">Locked {amount(w.locked)}</div></div>) : <p className="text-sm text-muted-foreground col-span-2">No wallet data in workspace.</p>}</div>
           {(sup || role === 'finance') && <Button className="rounded-full w-full" disabled={pending} data-testid="button-adjust-balance" onClick={() => p.open({ title: 'Adjust balance', body: 'Positive credits, negative debits. Recorded in the ledger and audit log.', fields: [{ key: 'currency', label: 'Currency code', required: true, placeholder: 'USDT' }, { key: 'amount', label: 'Amount', required: true, placeholder: '-12.50' }, { key: 'reason', label: 'Reason', required: true, multiline: true }], onSubmit: async (v) => { return await run('balance-adjust', { user_id: u.id, currency: v.currency.toUpperCase(), amount: v.amount, reason: v.reason }, { success: 'Balance adjusted' }); } })}><Coins className="w-4 h-4 me-1.5" />Adjust balance</Button>}
-          <div className="space-y-1">{mine('ledger').slice(0, 20).map((l) => <div key={String(l.id)} className="flex justify-between text-xs py-1 border-b"><span>{l.type} · {when(l.created_at)}</span><span className="num">{amount(l.amount)} {l.currency}</span></div>)}</div>
+          <div className="space-y-1">{mine('ledger').slice(0, 20).map((l) => <div key={String(l.id)} className="flex justify-between text-xs py-1 border-b"><span>{ledgerLabel(l.type)} · {when(l.created_at)}</span><span className="num">{amount(l.amount)} {l.currency}</span></div>)}</div>
         </TabsContent>
         <TabsContent value="activity" className="space-y-2 pt-2 text-sm">
           {(['rentals', 'deposits', 'withdrawals'] as const).map((k) => <div key={k}><div className="text-xs uppercase tracking-wider text-muted-foreground mt-2 mb-1">{k} ({mine(k).length})</div>{mine(k).slice(0, 8).map((r) => <div key={String(r.id)} className="flex justify-between py-1 border-b text-xs"><span>{r.asset_title || `${amount(r.amount ?? r.amount_claimed)} ${r.currency}`}</span><StatusChip status={r.status} /></div>)}</div>)}

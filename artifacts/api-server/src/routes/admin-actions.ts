@@ -188,7 +188,7 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
       assert(/^-?(?:0|[1-9]\d{0,17})(?:\.\d{1,18})?$/.test(raw),"Invalid decimal amount");
       const currency=z.enum(["BNB","USDT","USDC","BTC","ETH"]).parse(b.currency);
       await move(c,str(b.user_id),currency,raw,"admin_adjustment",u.id,`adjust:${uid()}`);
-      await event(b.user_id,"Wallet adjustment",`An administrator adjusted your wallet. Reason: ${reason}`,"wallet_adjusted",c);
+      await event(b.user_id,"Balance updated",`Your wallet balance was updated. Reason: ${reason}`,"wallet_adjusted",c);
     }else if(action==="user-update"){
       const [target]=await q("SELECT * FROM users WHERE id=$1 FOR UPDATE",[str(b.id)],c);
       assert(target,"User not found",404);

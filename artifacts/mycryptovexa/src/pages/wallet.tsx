@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePlatform, list, useRun } from '@/lib/platform';
 import { exportUrl, fileUrl, type R } from '@/lib/api';
-import { amount, num, when, D, dmax0, Decimal } from '@/lib/format';
+import { amount, num, when, D, dmax0, Decimal, ledgerLabel } from '@/lib/format';
 import { PageHeader, PageSkeleton, ErrorState, EmptyState, StatusChip, SignInPrompt, ActionSheet, CoinIcon, FilePick } from '@/components/app/kit';
 import { cn } from '@/lib/utils';
 
@@ -274,7 +274,7 @@ export default function WalletPage() {
         <TabsContent value="history">
           <div className="flex flex-wrap gap-2 mb-3">
             <Select value={fCur} onValueChange={setFCur}><SelectTrigger className="w-32 rounded-full" data-testid="select-filter-currency"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All coins</SelectItem>{codes.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
-            <Select value={fType} onValueChange={setFType}><SelectTrigger className="w-40 rounded-full" data-testid="select-filter-type"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All types</SelectItem>{types.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
+            <Select value={fType} onValueChange={setFType}><SelectTrigger className="w-40 rounded-full" data-testid="select-filter-type"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All types</SelectItem>{types.map((c) => <SelectItem key={c} value={c}>{ledgerLabel(c)}</SelectItem>)}</SelectContent></Select>
             <a href={exportUrl('ledger')} className="ms-auto inline-flex items-center gap-1.5 text-sm rounded-full border px-4 py-2 hover:bg-muted" data-testid="link-export-ledger"><Download className="w-4 h-4" />CSV</a>
           </div>
           {shownLedger.length ? (
@@ -282,7 +282,7 @@ export default function WalletPage() {
               {shownLedger.map((l) => (
                 <div key={String(l.id)} className="flex items-center gap-3 p-4" data-testid={`row-ledger-${l.id}`}>
                   <CoinIcon code={String(l.currency)} size={30} />
-                  <div className="flex-1 min-w-0"><div className="text-sm font-medium capitalize">{String(l.type).replace(/_/g, ' ')}</div><div className="text-xs text-muted-foreground">{when(l.created_at)}</div></div>
+                  <div className="flex-1 min-w-0"><div className="text-sm font-medium capitalize">{ledgerLabel(l.type)}</div><div className="text-xs text-muted-foreground">{when(l.created_at)}</div></div>
                   <div className="text-end"><div className={cn('num font-semibold', !D(l.amount).isNegative() ? 'text-emerald-600 dark:text-emerald-400' : '')}>{!D(l.amount).isNegative() ? '+' : ''}{amount(l.amount)}</div><div className="num text-[11px] text-muted-foreground">Bal {amount(l.balance_after)}</div></div>
                 </div>
               ))}
