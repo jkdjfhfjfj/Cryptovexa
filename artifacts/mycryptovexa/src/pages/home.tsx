@@ -77,13 +77,24 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="grid grid-cols-5 lg:grid-cols-3 gap-2 content-start rise" style={{ animationDelay: '80ms' }}>
-          {quick.map((q) => (
-            <Link key={q.label} href={q.href} className="press flex flex-col items-center justify-center gap-2 rounded-3xl bg-card border py-4 hover:border-primary/50 transition-colors" data-testid={`quick-${q.label}`}>
-              <span className="w-12 h-12 rounded-2xl bg-accent grid place-items-center"><q.icon className="w-5 h-5 text-accent-foreground" /></span>
-              <span className="text-[11px] md:text-xs font-medium text-center">{q.label}</span>
-            </Link>
-          ))}
+        <section className="grid grid-cols-6 lg:grid-cols-3 gap-2.5 content-start min-w-0 rise" style={{ animationDelay: '80ms' }}>
+          {quick.map((q, i) => {
+            const wide = i < 2;
+            return (
+              <Link key={q.label} href={q.href} title={q.label} aria-label={q.label} data-testid={`quick-${q.label}`}
+                className={cn(
+                  'press group min-w-0 rounded-2xl lg:rounded-3xl border bg-card hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors',
+                  wide
+                    ? 'col-span-3 flex items-center gap-2 min-h-[64px] px-2 py-3 min-[360px]:gap-3 min-[360px]:px-3 lg:col-span-1 lg:flex-col lg:justify-center lg:gap-2 lg:px-2 lg:py-4'
+                    : 'col-span-2 flex flex-col items-center justify-center gap-1.5 min-h-[80px] px-1.5 py-3 lg:col-span-1 lg:gap-2 lg:py-4',
+                )}>
+                <span className={cn('shrink-0 grid place-items-center rounded-xl lg:rounded-2xl lg:w-12 lg:h-12', wide ? 'w-10 h-10 bg-primary text-primary-foreground lg:bg-accent lg:text-accent-foreground' : 'w-10 h-10 bg-accent text-accent-foreground')}>
+                  <q.icon className="w-5 h-5" />
+                </span>
+                <span className={cn('min-w-0 max-w-full font-semibold leading-tight break-words hyphens-auto line-clamp-2', wide ? 'text-xs min-[360px]:text-sm text-start lg:text-xs lg:text-center' : 'text-xs text-center')}>{q.label}</span>
+              </Link>
+            );
+          })}
           <div className="hidden lg:flex rounded-3xl border bg-card p-4 col-span-1 flex-col justify-center">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Status</span>
             <span className="text-sm font-semibold mt-1 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />{state.settings?.maintenance ? 'Maintenance' : 'Operational'}</span>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useLocation } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { Mail, Lock, KeyRound, AtSign, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { usePlatform, useRun } from '@/lib/platform';
@@ -31,7 +31,7 @@ export default function AdminLoginPage() {
   }
 
   return (
-    <AuthLayout title={`${brand.short} Console`} sub="Staff sign in. Sessions are separate from user accounts.">
+    <AuthLayout title={`${brand.short} Console`} sub="Staff sign in. Sessions are separate from user accounts." footer={<div className="flex flex-wrap gap-x-6 gap-y-2"><Link href="/login" className="inline-flex min-h-11 items-center text-primary font-semibold rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="link-customer-login">Customer sign in</Link><Link href="/" className="inline-flex min-h-11 items-center hover:text-foreground rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="link-admin-home">Back to home</Link></div>}>
       <form className="space-y-4" onSubmit={async (e) => {
         e.preventDefault();
         const res = await run('login', { email: f.email, password: f.password, code: f.code || undefined }, { success: false });
@@ -39,8 +39,8 @@ export default function AdminLoginPage() {
         if (res.requires2fa || res.requiresTwoFactor || res.twofa_required) { setNeed2fa(true); return; }
         navigate('/admin/dashboard');
       }}>
-        <Field icon={Mail} label="Email" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} data-testid="input-admin-email" />
-        <Field icon={Lock} label="Password" type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} data-testid="input-admin-password" />
+        <Field icon={Mail} label="Email" type="email" autoComplete="username" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} data-testid="input-admin-email" />
+        <Field icon={Lock} label="Password" type="password" autoComplete="current-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} data-testid="input-admin-password" />
         {need2fa && <Field icon={KeyRound} label="Authenticator code" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value.trim() })} data-testid="input-admin-code" />}
         <Button type="submit" className="w-full h-12 rounded-full" disabled={pending || !f.email || !f.password} data-testid="button-admin-login">Sign in</Button>
         {setupAvailable && <button type="button" className="w-full text-sm text-primary font-semibold" onClick={() => setSetup(true)} data-testid="button-open-setup">First run: create administrator</button>}

@@ -77,7 +77,7 @@ export function UserShell({ children }: { children: ReactNode }) {
             <button className="w-10 h-10 grid place-items-center rounded-full hover:bg-muted" onClick={() => setTheme(resolved === 'dark' ? 'light' : 'dark')} data-testid="button-theme">
               {resolved === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </button>
-            <Link href="/help" className="w-10 h-10 grid place-items-center rounded-full hover:bg-muted" data-testid="link-help"><Headset className="w-5 h-5" /></Link>
+            <Link href="/help" aria-label={t('help')} className="w-10 h-10 hidden min-[360px]:grid place-items-center rounded-full hover:bg-muted" data-testid="link-help"><Headset className="w-5 h-5" /></Link>
             <Link href="/notifications" className="relative w-10 h-10 grid place-items-center rounded-full hover:bg-muted" data-testid="link-notifications">
               <Bell className="w-5 h-5" />
               {unread > 0 && <span className="absolute top-1.5 end-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-destructive text-[10px] font-bold text-white grid place-items-center" data-testid="text-unread">{unread > 9 ? '9+' : unread}</span>}
@@ -98,7 +98,7 @@ export function UserShell({ children }: { children: ReactNode }) {
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (
-              <Link href="/login" className="ms-1 press inline-flex items-center gap-1.5 rounded-full bg-primary text-primary-foreground px-4 py-2 text-sm font-semibold" data-testid="link-login">
+              <Link href="/login" aria-label={t('signIn')} className="ms-1 press inline-flex items-center gap-1.5 rounded-full bg-primary text-primary-foreground px-4 py-2 text-sm font-semibold" data-testid="link-login">
                 <LogIn className="w-4 h-4" /><span className="hidden sm:inline">{t('signIn')}</span>
               </Link>
             )}
