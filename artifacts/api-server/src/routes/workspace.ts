@@ -7,6 +7,15 @@ import { ObjectStorageService } from "../lib/objectStorage";
 import { marketRates } from "../lib/services";
 
 export const workspace: IRouter=Router();
+
+function addPrincipalAmounts(entries:any[],rentals:any[]){
+  const byId=new Map(rentals.map(r=>[String(r.id),r]));
+  return entries.map(entry=>{
+    if(!["rental_principal_lock","rental_principal_release"].includes(String(entry.type)))return entry;
+    const rental=byId.get(String(entry.ref_id));
+    return {...entry,principal_amount:String(rental?.data?.principal_amount??"0")};
+  });
+}
 const storage=new ObjectStorageService();
 const isZero=(value:unknown)=>/^0(?:\.0*)?$/.test(String(value??"0"));
 const assetView=(a:any)=>{
@@ -24,7 +33,7 @@ async function baseState(admin=false){
   if(admin){
     settings.security={...settings.security,...Object.fromEntries(["twofa_mode","admin_twofa_mode","api_keys_enabled","registration_mode","email_verification_required","captcha_enabled","captcha_site_key","login_lockout_attempts"].map(k=>[k,cfg[k]])),deposit_txid_required:cfg.txid_required};
     settings.billing={...cfg.billing,early_stop_penalty_percent:cfg.billing.early_stop_penalty,grace_period_minutes:cfg.billing.grace_minutes};
-    settings.withdrawal_rules={...cfg.withdrawal_rules,daily_limit_user:cfg.withdrawal_rules.daily_user_limit,daily_limit_global:cfg.withdrawal_rules.daily_global_limit,new_address_cooldown_hours:cfg.withdrawal_rules.cooldown_hours,address_blacklist:cfg.withdrawal_rules.blacklist};
+     settings.withdrawal_rules={...cfg.withdrawal_rules,daily_limit_user:cfg.withdrawal_rules.daily_user_limit,daily_limit_global:cfg.withdrawal_rules.daily_global_limit,new_address_cooldown_hours:cfg.withdrawal_rules.cooldown_hours,new_address_cooldown_value:cfg.withdrawal_rules.cooldown_value??cfg.withdrawal_rules.cooldown_hours??24,new_address_cooldown_unit:cfg.withdrawal_rules.cooldown_unit??"hours",address_blacklist:cfg.withdrawal_rules.blacklist};
     settings.terms=cfg.terms??{en:{deposit:cfg.deposit_terms,withdrawal:cfg.withdrawal_terms}};
     settings.binance={...cfg.binance,force_manual:cfg.force_manual};
     for(const key of ["binance_api_key","binance_api_secret","smtp_password","captcha_secret","telegram_bot_token"]){
@@ -63,9 +72,10 @@ workspace.get("/v1/workspace",async(req,res):Promise<void>=>{
     q("SELECT id,ip,device,created_at,expires_at,revoked FROM login_sessions WHERE user_id=$1 ORDER BY created_at DESC",[u.id]),
     getRecords("api_key",u.id),getRecords("referral",u.id),getRecords("commission",u.id),
   ]);
+  const ledgerWithPrincipal=addPrincipalAmounts(ledger,rentals);
   res.set("Cache-Control","no-store").json({
     user:safeUser(u),settings:Object.fromEntries(["site_name","short_name","brand_color","twofa_mode","api_keys_enabled","billing","referral_config"].map(k=>[k,cfg[k]])),
-    wallets,rentals:rentals.map(rentalView),deposits,withdrawals,ledger,
+    wallets,rentals:rentals.map(rentalView),deposits,withdrawals,ledger:ledgerWithPrincipal,
     tickets:tickets.map(t=>({...t,messages:t.messages.filter((m:any)=>!m.is_internal)})),
     notifications,kycRequests,addressBook,sessions:sessions.map(s=>({...s,current:s.id===u.session_id})),
     apiKeys:apiKeys.map(({key_hash,...a})=>a),referrals,commissions,
@@ -96,13 +106,14 @@ workspace.get("/admin/workspace",async(req,res):Promise<void>=>{
   const totals=await q("SELECT currency,sum(amount)::text AS total FROM ledger GROUP BY currency");
   const [lastReconciliation]=(await getRecords("reconciliation"));
   const users=(await q("SELECT * FROM users ORDER BY created_at DESC")).map(u=>({...safeUser(u),notes:u.data.notes??""}));
+  const adminRentals=await q("SELECT r.*,a.title AS asset_title FROM rentals r JOIN assets a ON a.id=r.asset_id ORDER BY start_at DESC");
   const result:any={...state,user:safeUser(u),admin:safeUser(u),users,stats:{...counts,revenue:Object.fromEntries(revenue.map(r=>[r.currency,r.total])),series,daily:series,ledger_totals:totals,reconciliation:lastReconciliation??{},
     binance:{configured:Boolean(state.settings.binance_api_key_configured),connected:Boolean(state.settings.binance_status?.connected),balance:state.settings.binance_status?.balances??null}},roles:["superadmin","finance","support"],
-    rentals:(await q("SELECT r.*,a.title AS asset_title FROM rentals r JOIN assets a ON a.id=r.asset_id ORDER BY start_at DESC")).map(rentalView)};
+    rentals:adminRentals.map(rentalView)};
   if(finance)Object.assign(result,{
     deposits:await q("SELECT d.*,u.email,u.username FROM deposits d JOIN users u ON u.id=d.user_id ORDER BY d.created_at DESC"),
     withdrawals:await q("SELECT w.*,u.email,u.username FROM withdrawals w JOIN users u ON u.id=w.user_id ORDER BY w.created_at DESC"),
-    ledger:await q("SELECT * FROM ledger ORDER BY created_at DESC LIMIT 1000"),wallets:await q("SELECT * FROM wallets"),
+    ledger:addPrincipalAmounts(await q("SELECT * FROM ledger ORDER BY created_at DESC LIMIT 1000"),adminRentals),wallets:await q("SELECT * FROM wallets"),
     reconciliations:await getRecords("reconciliation"),
   });
   if(support)Object.assign(result,{tickets:await getRecords("ticket"),kycRequests:await getRecords("kyc"),cannedReplies:await getRecords("canned_reply")});

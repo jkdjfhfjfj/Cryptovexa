@@ -26,7 +26,7 @@ type Platform = {
   bootError: unknown;
   workspaceLoading: boolean;
   workspaceError: unknown;
-  refetch: () => void;
+  refetch: () => Promise<void>;
 };
 const Ctx = createContext<Platform | null>(null);
 
@@ -64,7 +64,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   const uid = bootUser ? String(bootUser.id ?? bootUser.email ?? 'me') : null;
   // Workspace is scoped per signed-in identity so a different account never sees the previous account's cached data.
   const ws = useGetWorkspace({
-    query: { enabled: !!uid, queryKey: [...getGetWorkspaceQueryKey(), uid] as unknown as ReturnType<typeof getGetWorkspaceQueryKey>, refetchInterval: 15000 },
+    query: { enabled: !!uid, queryKey: [...getGetWorkspaceQueryKey(), uid] as unknown as ReturnType<typeof getGetWorkspaceQueryKey>, staleTime: Infinity, refetchOnMount: false },
   });
   const prevUid = useRef<string | null>(uid);
   useEffect(() => {
@@ -142,9 +142,8 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         bootError: boot.error,
         workspaceLoading: !!bootUser && ws.isLoading,
         workspaceError: ws.error,
-        refetch: () => {
-          boot.refetch();
-          if (bootUser) ws.refetch();
+        refetch: async () => {
+          await Promise.all([boot.refetch(), ...(bootUser ? [ws.refetch()] : [])]);
         },
       }}
     >
@@ -194,11 +193,10 @@ export function useRun(kind: Kind) {
           if(signingOut)qc.removeQueries({queryKey:kind==="adminAccount"?getGetAdminWorkspaceQueryKey():getGetWorkspaceQueryKey()});
         }
       }
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: getGetBootstrapQueryKey() }),
-        qc.invalidateQueries({ queryKey: getGetWorkspaceQueryKey() }),
-        qc.invalidateQueries({ queryKey: getGetAdminWorkspaceQueryKey() }),
-      ]);
+      const invalidations: Promise<unknown>[] = [qc.invalidateQueries({ queryKey: getGetBootstrapQueryKey() })];
+      if (kind === 'account' || kind === 'user') invalidations.push(qc.invalidateQueries({ queryKey: getGetWorkspaceQueryKey() }));
+      if (kind === 'admin' || kind === 'adminAccount') invalidations.push(qc.invalidateQueries({ queryKey: getGetAdminWorkspaceQueryKey() }));
+      await Promise.all(invalidations);
       if (res && res.success === false) {
         if (!o.silentError) toast({ title: 'Not completed', description: res.message || 'The request was not accepted.', variant: 'destructive' });
         return null;

@@ -28,16 +28,17 @@ export const num = (v: unknown) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** Display money with decimal precision (no float conversion). */
-export const amount = (v: unknown, max = 8) => {
+/** Display money to three places without converting through floating point. */
+export const amount = (v: unknown) => {
   const d = D(v);
-  const dp = !d.isZero() && d.abs().lt(1) ? max : Math.max(4, Math.min(max, d.decimalPlaces()));
-  return group(d.toFixed(Math.min(dp, max), Decimal.ROUND_DOWN), 2);
+  const rounded = d.toDecimalPlaces(3, Decimal.ROUND_HALF_UP);
+  if (!d.isZero() && rounded.isZero()) return d.isNegative() ? '-<0.001' : '<0.001';
+  return group(rounded.toFixed(3), 3);
 };
 
 export const usd = (v: unknown) => {
   const d = D(v);
-  return `${d.isNegative() ? '-' : ''}$${group(d.abs().toFixed(2, Decimal.ROUND_HALF_UP), 2)}`;
+  return `${d.isNegative() ? '-' : ''}$${group(d.abs().toFixed(3, Decimal.ROUND_HALF_UP), 3)}`;
 };
 
 export const when = (v: unknown) => {
@@ -83,3 +84,32 @@ export const ledgerLabel = (value: unknown) => {
   };
   return labels[label] ?? label;
 };
+
+export const ledgerMovement = (entry: { type?: unknown; amount?: unknown; principal_amount?: unknown }) => {
+  const type = String(entry.type ?? '');
+  if (type === 'rental_principal_lock') return `Locked ${amount(entry.principal_amount)}`;
+  if (type === 'rental_principal_release') return `Released ${amount(entry.principal_amount)}`;
+  const value = D(entry.amount);
+  return `${value.isNegative() ? '' : '+'}${amount(value)}`;
+};
+
+export function withdrawalCooldownMinutes(settings: unknown) {
+  const root = settings && typeof settings === 'object' ? settings as Record<string, unknown> : {};
+  const rules = root.withdrawal_rules && typeof root.withdrawal_rules === 'object'
+    ? root.withdrawal_rules as Record<string, unknown>
+    : root;
+  const stored = Number(rules.cooldown_minutes);
+  if (Number.isFinite(stored) && stored >= 1) return Math.ceil(stored);
+  const value = Number(rules.cooldown_value ?? rules.new_address_cooldown_value ?? rules.cooldown_hours ?? 24);
+  const unit = String(rules.cooldown_unit ?? rules.new_address_cooldown_unit ?? 'hours');
+  const minutes = value * (unit === 'minutes' ? 1 : 60);
+  return Number.isFinite(minutes) && minutes >= 1 ? Math.ceil(minutes) : 1440;
+}
+
+export const cooldownLabel = (minutes: number) => minutes % 60 === 0
+  ? `${minutes / 60} hour${minutes === 60 ? '' : 's'}`
+  : `${minutes} minute${minutes === 1 ? '' : 's'}`;
+
+export const cooldownAdjective = (minutes: number) => minutes % 60 === 0
+  ? `${minutes / 60}-hour`
+  : `${minutes}-minute`;

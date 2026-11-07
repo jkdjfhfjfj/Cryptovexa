@@ -6,8 +6,17 @@ import { pool } from "@workspace/db";
 import app from "../app";
 import { hash, q, uid, transaction, move, record } from "../lib/platform";
 import { ObjectStorageService } from "../lib/objectStorage";
+import { withdrawalCooldownMinutes, cooldownLabel } from "../routes/user-actions";
 
 strict.notEqual(process.env.NODE_ENV,"production","API fixtures must never run against a production runtime");
+
+test("Withdrawal-address cooldown accepts administrator minutes, hours, and legacy hour settings",()=>{
+  strict.equal(withdrawalCooldownMinutes({cooldown_value:15,cooldown_unit:"minutes"}),15);
+  strict.equal(withdrawalCooldownMinutes({cooldown_value:2,cooldown_unit:"hours"}),120);
+  strict.equal(withdrawalCooldownMinutes({cooldown_hours:24}),1440);
+  strict.equal(cooldownLabel(15),"15 minutes");
+  strict.equal(cooldownLabel(120),"2 hours");
+});
 
 // Full HTTP/SQL boundary checks, without external transfers or global settings changes.
 const people=new Map<string,{id:string;email:string;cookie:string;csrf:string}>();
@@ -134,6 +143,9 @@ test("Concurrent HTTP rental request replay returns the same response and capita
   const first:any=await a.json(),second:any=await b.json();
   strict.deepEqual(second,first);strict.equal(first.success,true);strict.equal(typeof first.id,"string");
   const [{n}]=await q("SELECT count(*)::integer AS n FROM ledger WHERE user_id=$1 AND type='rental_principal_lock'",[user.id]);strict.equal(n,1);
+   const history:any=await (await request("user","/v1/workspace")).json();
+   const lockEntry=history.ledger.find((entry:any)=>entry.ref_id===first.id&&entry.type==="rental_principal_lock");
+   strict.ok(lockEntry);strict.equal(Number(lockEntry.amount),0);strict.equal(lockEntry.principal_amount,"10");
   const [wallet]=await q("SELECT balance,locked FROM wallets WHERE user_id=$1 AND currency='USDT'",[user.id]);
   strict.equal(wallet.balance,"20.000000000000000000");strict.equal(wallet.locked,"10.000000000000000000");
 });

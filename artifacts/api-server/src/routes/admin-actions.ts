@@ -79,7 +79,7 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
         if(v[field])await putSetting(key,str(v[field],1,4000),true,c);
         delete v[field];
       }
-      const aliases:Record<string,string>={deposit_txid_required:"txid_required",early_stop_penalty_percent:"early_stop_penalty",grace_period_minutes:"grace_minutes",daily_limit_user:"daily_user_limit",daily_limit_global:"daily_global_limit",new_address_cooldown_hours:"cooldown_hours",address_blacklist:"blacklist"};
+      const aliases:Record<string,string>={deposit_txid_required:"txid_required",early_stop_penalty_percent:"early_stop_penalty",grace_period_minutes:"grace_minutes",daily_limit_user:"daily_user_limit",daily_limit_global:"daily_global_limit",new_address_cooldown_hours:"cooldown_hours",new_address_cooldown_value:"cooldown_value",new_address_cooldown_unit:"cooldown_unit",address_blacklist:"blacklist"};
       for(const [old,key] of Object.entries(aliases))if(v[old]!==undefined)v[key]=v[old];
       if(section==="terms"){
         await putSetting("terms",{...(cfg.terms??{}),...v},false,c);
@@ -93,7 +93,21 @@ adminActions.post("/admin/actions/:action",async(req,res):Promise<void>=>{
       }
       if(["withdrawal_rules","withdrawal"].includes(section)){
         for(const k of ["auto_threshold","daily_user_limit","daily_global_limit","large_alert_threshold"])if(v[k]!==undefined)v[k]=amountOrZero(v[k]);
-        if(v.cooldown_hours!==undefined)assert(Number.isFinite(Number(v.cooldown_hours))&&Number(v.cooldown_hours)>=24,"New-address cooldown must be at least 24 hours");
+        if(v.cooldown_unit!==undefined)v.cooldown_unit=z.enum(["minutes","hours"]).parse(v.cooldown_unit);
+        if(v.cooldown_value!==undefined)assert(Number.isInteger(Number(v.cooldown_value))&&Number(v.cooldown_value)>=1&&Number(v.cooldown_value)<=525600,"New-address cooldown must be at least 1 minute and no more than 1 year");
+        if(v.cooldown_value!==undefined||v.cooldown_unit!==undefined){
+          const unit=String(v.cooldown_unit??cfg.withdrawal_rules.cooldown_unit??"hours");
+          const value=Number(v.cooldown_value??cfg.withdrawal_rules.cooldown_value??cfg.withdrawal_rules.cooldown_hours??24);
+          const maxValue=unit==="hours"?8760:525600;
+          assert(["minutes","hours"].includes(unit)&&Number.isInteger(value)&&value>=1&&value<=maxValue,"Invalid new-address cooldown");
+          v.cooldown_minutes=value*(unit==="hours"?60:1);
+          v.cooldown_hours=v.cooldown_minutes/60;
+        }
+        if(v.cooldown_hours!==undefined&&v.cooldown_value===undefined&&v.cooldown_unit===undefined){
+          const hours=Number(v.cooldown_hours);
+          assert(Number.isFinite(hours)&&hours>0&&hours<=8760,"Invalid new-address cooldown");
+          v.cooldown_value=hours;v.cooldown_unit="hours";v.cooldown_minutes=Math.ceil(hours*60);
+        }
         if(v.blacklist!==undefined)v.blacklist=z.array(z.string().min(1).max(256)).max(10000).parse(v.blacklist);
       }
       if(["referral","referral_config"].includes(section)){

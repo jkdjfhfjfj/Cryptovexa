@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { useTranslation } from 'react-i18next';
 import { QRCodeSVG } from 'qrcode.react';
-import { UserRound, ShieldCheck, KeyRound, MonitorSmartphone, SlidersHorizontal, Copy, Trash2, LogOut, Users, Bell, FileText, ChevronRight } from 'lucide-react';
+import { UserRound, ShieldCheck, KeyRound, MonitorSmartphone, SlidersHorizontal, Copy, Trash2, LogOut, Users, Bell, FileText, ChevronRight, BookUser, Plus } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,10 +11,10 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePlatform, list, useRun } from '@/lib/platform';
 import { type R } from '@/lib/api';
-import { when, ago } from '@/lib/format';
+import { when, ago, cooldownLabel, withdrawalCooldownMinutes } from '@/lib/format';
 import { LANGUAGES, applyLanguage } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
-import { PageHeader, PageSkeleton, ErrorState, EmptyState, StatusChip, SignInPrompt } from '@/components/app/kit';
+import { PageHeader, PageSkeleton, ErrorState, EmptyState, StatusChip, SignInPrompt, CoinIcon } from '@/components/app/kit';
 
 const NOTIF = ['deposits', 'withdrawals', 'rentals', 'referrals', 'security', 'marketing'];
 
@@ -31,6 +31,7 @@ export default function ProfilePage() {
   const [notif, setNotif] = useState<Record<string, boolean>>({});
   const [key, setKey] = useState({ name: '', ip: '' });
   const [newKey, setNewKey] = useState('');
+  const [newAddress, setNewAddress] = useState({ label: '', currency: '', network: '', address: '', memo: '' });
 
   useEffect(() => {
     if (user) {
@@ -46,6 +47,19 @@ export default function ProfilePage() {
   const twofaMode = String(settings.twofa_mode || 'optional');
   const apiOn = !!settings.api_keys_enabled;
   const pwOk = pw.password.length >= 12 && pw.password === pw.confirm;
+  const addressCooldown = withdrawalCooldownMinutes(settings);
+  const addressCooldownText = cooldownLabel(addressCooldown);
+  const currencies = list(state.currencies).filter((currency) => currency.enabled !== false);
+  const selectedCurrency = currencies.find((currency) => currency.code === newAddress.currency);
+  const addressNetworks = list(selectedCurrency?.networks).filter((network) => network.enabled !== false);
+  const selectedNetwork = addressNetworks.find((network) => network.name === newAddress.network);
+  let addressValid = !newAddress.address || !selectedNetwork?.address_regex;
+  try {
+    if (newAddress.address && selectedNetwork?.address_regex) addressValid = new RegExp(String(selectedNetwork.address_regex)).test(newAddress.address);
+  } catch {
+    addressValid = false;
+  }
+  const addressMemoRequired = !!selectedNetwork?.memo_required;
 
   return (
     <div>
@@ -74,6 +88,7 @@ export default function ProfilePage() {
         <TabsList className="rounded-full h-11 p-1 mb-4 w-full md:w-auto overflow-x-auto no-scrollbar justify-start">
           <TabsTrigger value="security" className="rounded-full" data-testid="tab-security"><ShieldCheck className="w-4 h-4 me-1.5" />{t('security')}</TabsTrigger>
           <TabsTrigger value="prefs" className="rounded-full" data-testid="tab-prefs"><SlidersHorizontal className="w-4 h-4 me-1.5" />{t('preferences')}</TabsTrigger>
+          <TabsTrigger value="addresses" className="rounded-full" data-testid="tab-withdrawal-addresses"><BookUser className="w-4 h-4 me-1.5" />Withdrawal addresses</TabsTrigger>
           <TabsTrigger value="sessions" className="rounded-full" data-testid="tab-sessions"><MonitorSmartphone className="w-4 h-4 me-1.5" />{t('sessions')}</TabsTrigger>
           {apiOn && <TabsTrigger value="api" className="rounded-full" data-testid="tab-api"><KeyRound className="w-4 h-4 me-1.5" />{t('apiKeys')}</TabsTrigger>}
         </TabsList>
@@ -127,6 +142,36 @@ export default function ProfilePage() {
             <div className="grid grid-cols-3 gap-2 p-1 rounded-full bg-muted">{(['light', 'dark', 'system'] as const).map((m) => <button key={m} onClick={() => setTheme(m)} className={`rounded-full py-2 text-sm capitalize ${theme === m ? 'bg-card shadow font-semibold' : 'text-muted-foreground'}`} data-testid={`button-theme-${m}`}>{m}</button>)}</div>
             <div className="divide-y">{NOTIF.map((k) => <label key={k} className="flex items-center justify-between py-2.5 text-sm capitalize">{k}{k === 'security' ? ' (required)' : ''}<Switch checked={k === 'security' || notif[k] !== false} disabled={k === 'security'} onCheckedChange={(v) => setNotif({ ...notif, [k]: v })} data-testid={`switch-notif-${k}`} /></label>)}</div>
             <Button className="rounded-full" disabled={usr.pending} onClick={() => usr.run('profile-preferences', { language: prof.language, theme, notifications: notif }, { success: 'Preferences saved' })} data-testid="button-save-prefs">{t('save')}</Button>
+          </section>
+        </TabsContent>
+
+        <TabsContent value="addresses" className="space-y-4">
+          <section className="rounded-3xl border bg-card p-5 space-y-4">
+            <div>
+              <h3 className="font-semibold">Withdrawal addresses</h3>
+              <p className="text-sm text-muted-foreground mt-1">Whitelist the destination first. New addresses become available after {addressCooldownText}; withdrawals can only go to saved addresses.</p>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div><Label>Address label</Label><Input placeholder="My wallet" value={newAddress.label} onChange={(e) => setNewAddress({ ...newAddress, label: e.target.value })} className="mt-1 rounded-xl" data-testid="input-profile-address-label" /></div>
+              <div className="grid grid-cols-2 gap-2">
+                <div><Label>Currency</Label><Select value={newAddress.currency} onValueChange={(currency) => setNewAddress({ ...newAddress, currency, network: '' })}><SelectTrigger className="mt-1 rounded-xl" data-testid="select-profile-address-currency"><SelectValue placeholder="Coin" /></SelectTrigger><SelectContent>{currencies.map((currency) => <SelectItem key={String(currency.code)} value={String(currency.code)}>{String(currency.code)}</SelectItem>)}</SelectContent></Select></div>
+                <div><Label>Network</Label><Select value={newAddress.network} onValueChange={(network) => setNewAddress({ ...newAddress, network })}><SelectTrigger className="mt-1 rounded-xl" data-testid="select-profile-address-network"><SelectValue placeholder="Network" /></SelectTrigger><SelectContent>{addressNetworks.map((network) => <SelectItem key={String(network.name)} value={String(network.name)}>{String(network.name)}</SelectItem>)}</SelectContent></Select></div>
+              </div>
+              <div className="sm:col-span-2"><Label>Wallet address</Label><Input placeholder="Paste the exact destination address" value={newAddress.address} onChange={(e) => setNewAddress({ ...newAddress, address: e.target.value.trim() })} className="mt-1 rounded-xl font-mono text-xs" data-testid="input-profile-address" />{!addressValid && <p className="text-xs text-destructive mt-1">This address does not match the selected network.</p>}</div>
+              <div className="sm:col-span-2"><Label>{addressMemoRequired ? 'Memo / tag (required)' : 'Memo / tag (optional)'}</Label><Input placeholder="Only if your exchange requires it" value={newAddress.memo} onChange={(e) => setNewAddress({ ...newAddress, memo: e.target.value })} className="mt-1 rounded-xl" data-testid="input-profile-address-memo" /></div>
+            </div>
+            <Button disabled={usr.pending || !newAddress.label.trim() || !newAddress.currency || !newAddress.network || !newAddress.address || !addressValid || (addressMemoRequired && !newAddress.memo.trim())} onClick={() => usr.run('address-create', { ...newAddress, memo: newAddress.memo || undefined }, { success: `Address saved. Usable after ${addressCooldownText}.`, onSuccess: () => setNewAddress({ label: '', currency: '', network: '', address: '', memo: '' }) })} className="rounded-full" data-testid="button-profile-save-address"><Plus className="w-4 h-4 me-1.5" />Whitelist address</Button>
+          </section>
+          <section className="rounded-3xl border bg-card p-5 space-y-3">
+            <h3 className="font-semibold">Saved destinations</h3>
+            {list(state.addressBook).length ? list(state.addressBook).map((address) => {
+              const cooling = new Date(String(address.usable_after)).getTime() > Date.now();
+              return <div key={String(address.id)} className="flex items-center gap-3 rounded-2xl border p-3" data-testid={`row-profile-address-${address.id}`}>
+                <CoinIcon code={String(address.currency)} size={30} />
+                <div className="flex-1 min-w-0"><div className="font-medium text-sm">{address.label} · {address.currency}/{address.network}</div><div className="text-xs font-mono break-all">{address.address}{address.memo ? ` · ${address.memo}` : ''}</div><div className="text-[11px] mt-1 text-muted-foreground">{cooling ? `Cooling until ${when(address.usable_after)}` : 'Ready for withdrawals'}</div></div>
+                <Button size="icon" variant="ghost" className="rounded-full shrink-0" disabled={usr.pending} onClick={() => usr.run('address-delete', { id: address.id }, { success: 'Withdrawal address removed' })} aria-label={`Remove ${address.label}`} data-testid={`button-profile-delete-address-${address.id}`}><Trash2 className="w-4 h-4" /></Button>
+              </div>;
+            }) : <EmptyState icon={BookUser} title="No withdrawal addresses yet" body="Whitelist an address above before requesting a withdrawal." />}
           </section>
         </TabsContent>
 

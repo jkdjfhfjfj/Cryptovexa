@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 
-export type PromptField = { key: string; label: string; required?: boolean; multiline?: boolean; type?: string; placeholder?: string; initial?: string };
+export type PromptField = { key: string; label: string; required?: boolean; multiline?: boolean; type?: string; placeholder?: string; initial?: string; step?: string; maxDecimals?: number; allowNegative?: boolean };
 
 /** Modal form for review actions that need reasons, amounts or TXIDs. */
 export function usePrompt() {
@@ -19,7 +19,13 @@ export function usePrompt() {
     setAck(false);
     setCfg(c);
   };
-  const valid = cfg && cfg.fields.every((f) => !f.required || (vals[f.key] || '').trim()) && (!cfg.ack || ack);
+  const valid = cfg && cfg.fields.every((f) => {
+    const value = (vals[f.key] || '').trim();
+    if (f.required && !value) return false;
+    if (!value || !f.maxDecimals) return true;
+    const sign = f.allowNegative ? '-?' : '';
+    return new RegExp(`^${sign}\\d+(?:\\.\\d{1,${f.maxDecimals}})?$`).test(value);
+  }) && (!cfg.ack || ack);
   const node: ReactNode = (
     <Dialog open={!!cfg} onOpenChange={(o) => !o && setCfg(null)}>
       <DialogContent className="rounded-3xl">
@@ -29,7 +35,7 @@ export function usePrompt() {
             <div key={f.key}>
               <Label className="text-xs">{f.label}{f.required && ' *'}</Label>
               {f.multiline ? <Textarea rows={3} value={vals[f.key] || ''} placeholder={f.placeholder} onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })} className="mt-1 rounded-xl" data-testid={`prompt-${f.key}`} />
-                : <Input type={f.type || 'text'} value={vals[f.key] || ''} placeholder={f.placeholder} onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })} className="mt-1 rounded-xl" data-testid={`prompt-${f.key}`} />}
+                : <Input type={f.type || 'text'} step={f.step} value={vals[f.key] || ''} placeholder={f.placeholder} onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })} className="mt-1 rounded-xl" data-testid={`prompt-${f.key}`} />}
             </div>
           ))}
           {cfg?.ack && <label className="flex items-start gap-2 text-sm"><Checkbox checked={ack} onCheckedChange={(v) => setAck(v === true)} data-testid="prompt-ack" />{cfg.ack}</label>}

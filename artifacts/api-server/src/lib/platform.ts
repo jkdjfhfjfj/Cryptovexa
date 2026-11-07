@@ -180,7 +180,7 @@ export const defaultSettings: Record<string, any> = {
   deposit_terms: "Only send the selected currency on the selected network. With automatic Binance deposits enabled, funds are credited only after Binance confirms an exact match; otherwise an administrator reviews the deposit. Transfers may be irreversible.",
   withdrawal_terms: "Verify the network and destination carefully. Cryptocurrency transfers cannot be reversed. Fees apply.",
   billing: { proration: true, early_stop_penalty: "0", grace_minutes: 15, low_balance_threshold: "10", minimum_charge: "0" },
-  withdrawal_rules: { cooldown_hours: 24, daily_user_limit: "10000", daily_global_limit: "100000", auto_threshold: "1000", blacklist: [] },
+  withdrawal_rules: { cooldown_hours: 24, cooldown_value: 24, cooldown_unit: "hours", cooldown_minutes: 1440, daily_user_limit: "10000", daily_global_limit: "100000", auto_threshold: "1000", blacklist: [] },
   referral_config: { enabled: true, levels: 1, percentages: ["5","2","1"], trigger: "first_deposit", cap: "1000" },
   security: { captcha_enabled: false, registration_mode: "open" },
   smtp: { host: "", port: 587, username: "", from_email: "", from_name: "", public_url: "", email_logo_url: "", tls: false },
@@ -226,7 +226,7 @@ export async function seedPlatform() {
   const articles = [
     ["getting-started","Getting started with your account","Getting started","Create an account, review the risk disclosure and secure your account with two-factor authentication. Fund your wallet only after the administrator has configured a verified deposit address."],
     ["deposits","How crypto deposits work","Wallet & payments","Choose your coin and network. Send funds to the displayed address, then submit the exact amount and transaction ID. When automatic Binance deposits are enabled, only a successful exact match is credited; anything unverified remains in the manual review queue."],
-    ["withdrawals","Withdrawing your crypto","Wallet & payments","Save a destination address and wait for the 24-hour security cooldown. Check fees and network before submitting. Verify the emailed code or your authenticator. Administrators can process withdrawals manually when automatic service is unavailable."],
+    ["withdrawals","Withdrawing your crypto","Wallet & payments","Add a destination under Withdrawal addresses in your profile and wait for the security cooldown set by the administrator. Check fees and network before submitting. Verify the emailed code or your authenticator. Administrators can process withdrawals manually when automatic service is unavailable."],
     ["rentals","Rental profit and settlement","Rentals","Each listing displays its required capital and admin-configured profit rates per minute, hour and day. Capital is locked when you book. At maturity, the principal is released and the scheduled profit is credited. Early stops release principal and settle prorated profit. Rates are snapshotted when you book."],
     ["referrals","Invite friends responsibly","Referrals","Share your unique link. Commissions depend on the administrator's current settings. Earnings are never guaranteed. Self-referrals are not permitted."],
     ["security","Protecting your account","Security","Use a strong unique password and enable two-factor authentication. Review active sessions, revoke unknown devices and never share recovery codes."],

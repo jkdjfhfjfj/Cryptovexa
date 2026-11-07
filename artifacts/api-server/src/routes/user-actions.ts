@@ -8,6 +8,15 @@ import { checkTwofa } from "./accounts";
 import { getBinanceDepositAddress, getCachedBinanceDepositAddress, marketRates } from "../lib/services";
 
 export const userActions: IRouter = Router();
+export function withdrawalCooldownMinutes(rules:any){
+  const saved=Number(rules?.cooldown_minutes);
+  if(Number.isFinite(saved)&&saved>=1)return Math.ceil(saved);
+  const value=Number(rules?.cooldown_value??rules?.cooldown_hours??24);
+  const minutes=value*(rules?.cooldown_unit==="minutes"?1:60);
+  return Number.isFinite(minutes)&&minutes>=1?Math.ceil(minutes):1440;
+}
+export function cooldownLabel(minutes:number){return minutes%60===0?`${minutes/60} hour${minutes===60?"":"s"}`:`${minutes} minute${minutes===1?"":"s"}`;}
+function cooldownAdjective(minutes:number){return minutes%60===0?`${minutes/60}-hour`:`${minutes}-minute`;}
 export async function currencyNetwork(currency: unknown,network: unknown,c?:any) {
   assert(["BNB","USDT","USDC","BTC","ETH"].includes(String(currency)),"Unsupported currency");
   const cur=await ownedRecord(`currency-${currency}`,"currency",undefined,c);
@@ -102,9 +111,9 @@ userActions.post("/v1/actions/:action",async(req,res):Promise<void>=>{
       const address=str(b.address,10,256);
       assert(new RegExp(net.address_regex).test(address),"Address format does not match the network");
       if(net.memo_required)str(b.memo,1,100);
-      const cooldown=Math.max(24,Number(cfg.withdrawal_rules.cooldown_hours??24));
-      const id=await record("address",{label:str(b.label,1,100),currency:b.currency,network:b.network,address,memo:b.memo??"",usable_after:new Date(Date.now()+cooldown*3600000).toISOString()},u.id,uid(),c);
-      result={...result,id,message:`Address saved. Security cooldown: ${cooldown} hours.`};
+      const cooldown=withdrawalCooldownMinutes(cfg.withdrawal_rules);
+      const id=await record("address",{label:str(b.label,1,100),currency:b.currency,network:b.network,address,memo:b.memo??"",usable_after:new Date(Date.now()+cooldown*60000).toISOString()},u.id,uid(),c);
+      result={...result,id,message:`Address saved. Security cooldown: ${cooldownLabel(cooldown)}.`};
     }else if(action==="address-delete"){
       await q("DELETE FROM platform_records WHERE id=$1 AND user_id=$2 AND kind='address'",[str(b.id),u.id],c);
     }else if(action==="withdraw"){
@@ -115,7 +124,7 @@ userActions.post("/v1/actions/:action",async(req,res):Promise<void>=>{
       assert(new RegExp(net.address_regex).test(address),"Address format does not match the selected network");
       assert(!(cfg.withdrawal_rules.blacklist??[]).includes(address),"This address cannot receive withdrawals");
       const addresses=await getRecords("address",u.id,c), saved=addresses.find(a=>a.address===address&&a.currency===b.currency&&a.network===b.network);
-      assert(saved&&new Date(saved.usable_after).getTime()<=Date.now(),"Save this address first and wait for its 24-hour security cooldown.");
+      assert(saved&&new Date(saved.usable_after).getTime()<=Date.now(),`This address has not completed its ${cooldownAdjective(withdrawalCooldownMinutes(cfg.withdrawal_rules))} security cooldown.`);
       if(net.memo_required)str(saved.memo,1,100);
       const [{valid}]=await q("SELECT $1::numeric BETWEEN $2::numeric AND $3::numeric AS valid",[value,cur.min_withdraw,cur.max_withdraw],c);
       assert(valid,`Withdrawal must be between ${cur.min_withdraw} and ${cur.max_withdraw} ${b.currency}`);

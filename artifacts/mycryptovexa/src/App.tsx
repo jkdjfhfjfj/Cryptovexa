@@ -32,7 +32,7 @@ import { AdminContent, AdminEmails, AdminLogs, AdminReports } from '@/pages/admi
 import AdminSettings from '@/pages/admin/settings';
 import AdminSecurity from '@/pages/admin/security';
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } });
+const queryClient = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, refetchOnReconnect: false } } });
 
 const u = (C: () => ReactNode) => () => <UserShell><C /></UserShell>;
 const a = (C: () => ReactNode) => () => <AdminShell><C /></AdminShell>;

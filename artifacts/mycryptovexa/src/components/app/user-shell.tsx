@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useTranslation } from 'react-i18next';
-import { Bell, Globe, Headset, Home, Store, Timer, Wallet, UserRound, Moon, Sun, LogIn, LogOut, Users, ShieldCheck, Download, Wrench } from 'lucide-react';
+import { Bell, Globe, Headset, Home, Store, Timer, Wallet, UserRound, Moon, Sun, LogIn, LogOut, Users, ShieldCheck, Download, Wrench, RefreshCw } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { usePlatform, list, useRun } from '@/lib/platform';
@@ -23,7 +23,7 @@ type BIP = Event & { prompt: () => Promise<void> };
 export function UserShell({ children }: { children: ReactNode }) {
   const { t, i18n } = useTranslation();
   const [loc, navigate] = useLocation();
-  const { brand, user, state, settings } = usePlatform();
+  const { brand, user, state, settings, refetch } = usePlatform();
   const { resolved, setTheme } = useTheme();
   const { run } = useRun('account');
   const { run: runUser } = useRun('user');
@@ -94,6 +94,7 @@ export function UserShell({ children }: { children: ReactNode }) {
                   <DropdownMenuItem onClick={() => navigate('/profile')}><UserRound className="w-4 h-4 me-2" />{t('profile')}</DropdownMenuItem>
                   <DropdownMenuItem onClick={() => navigate('/kyc')}><ShieldCheck className="w-4 h-4 me-2" />{t('kyc')}</DropdownMenuItem>
                   <DropdownMenuItem onClick={() => navigate('/referrals')}><Users className="w-4 h-4 me-2" />{t('referrals')}</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void refetch()} data-testid="menu-refresh-data"><RefreshCw className="w-4 h-4 me-2" />Refresh data</DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem data-testid="button-logout" onClick={() => run('logout', {}, { success: 'Signed out', onSuccess: () => navigate('/') })}><LogOut className="w-4 h-4 me-2" />{t('signOut')}</DropdownMenuItem>
                 </DropdownMenuContent>

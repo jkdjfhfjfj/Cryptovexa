@@ -11,9 +11,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/hooks/use-toast';
 import { usePlatform, list, useRun } from '@/lib/platform';
 import { csrfOpts, errorMessage, fileUrl, type R } from '@/lib/api';
-import { ago, titleCase } from '@/lib/format';
+import { ago, titleCase, cooldownAdjective, withdrawalCooldownMinutes } from '@/lib/format';
 import { PageHeader, PageSkeleton, ErrorState, EmptyState, StatusChip, SignInPrompt, ActionSheet, FilePick } from '@/components/app/kit';
 import { cn } from '@/lib/utils';
+
+const cooldownAwareArticleBody = (body: unknown, settings: R) =>
+  String(body || '').replace(/24-hour security cooldown/gi, `${cooldownAdjective(withdrawalCooldownMinutes(settings))} security cooldown`);
 
 const useArticles = () => {
   const { state } = usePlatform();
@@ -47,7 +50,7 @@ function TicketForm({ onDone }: { onDone: () => void }) {
 
 export function HelpPage() {
   const { t } = useTranslation();
-  const { state, user, booting, bootError, refetch } = usePlatform();
+  const { state, user, settings, booting, bootError, refetch } = usePlatform();
   const arts = useArticles();
   const [q, setQ] = useState('');
   const [cat, setCat] = useState('all');
@@ -75,7 +78,7 @@ export function HelpPage() {
           </div>
           {shown.length ? <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] sm:grid-cols-[repeat(2,minmax(0,1fr))] gap-3">{shown.map((a) => (
             <Link key={String(a.id)} href={`/help/article/${a.slug}`} className="press min-w-0 [overflow-wrap:anywhere] rounded-3xl border bg-card p-5 hover:border-primary/50 block" data-testid={`card-article-${a.slug}`}>
-              <BookOpen className="w-5 h-5 text-primary" /><h3 className="font-semibold mt-3">{a.title}</h3><p className="text-sm text-muted-foreground mt-1 line-clamp-2">{String(a.body || '').replace(/<[^>]+>/g, '').slice(0, 140)}</p><span className="text-[11px] text-muted-foreground mt-3 block">{a.category}</span>
+              <BookOpen className="w-5 h-5 text-primary" /><h3 className="font-semibold mt-3">{a.title}</h3><p className="text-sm text-muted-foreground mt-1 line-clamp-2">{cooldownAwareArticleBody(a.body, settings).replace(/<[^>]+>/g, '').slice(0, 140)}</p><span className="text-[11px] text-muted-foreground mt-3 block">{a.category}</span>
             </Link>))}</div> : <EmptyState icon={Search} title="No articles found" body="Try different words, or open a ticket and a person will reply." />}
         </div>
         <aside className="min-w-0 space-y-3">
@@ -97,7 +100,7 @@ export function HelpPage() {
 
 export function ArticlePage() {
   const { slug } = useParams<{ slug: string }>();
-  const { booting, user } = usePlatform();
+  const { booting, user, settings } = usePlatform();
   const arts = useArticles();
   const { toast } = useToast();
   const [voted, setVoted] = useState<boolean | null>(null);
@@ -120,7 +123,7 @@ export function ArticlePage() {
       <Link href="/help" className="flex items-center gap-1.5 text-sm text-muted-foreground mb-4" data-testid="link-back-help"><ArrowLeft className="w-4 h-4 rtl:rotate-180" />Help Center</Link>
       <span className="text-xs uppercase tracking-wider text-primary">{a.category}</span>
       <h1 className="text-3xl font-semibold tracking-tight mt-1 mb-6">{a.title}</h1>
-      <article className="prose prose-slate dark:prose-invert min-w-0 max-w-none prose-img:rounded-2xl [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto" dangerouslySetInnerHTML={{ __html: String(a.body || '') }} data-testid="article-body" />
+      <article className="prose prose-slate dark:prose-invert min-w-0 max-w-none prose-img:rounded-2xl [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto" dangerouslySetInnerHTML={{ __html: cooldownAwareArticleBody(a.body, settings) }} data-testid="article-body" />
       <div className="mt-10 rounded-3xl border bg-card p-5 flex flex-wrap items-center gap-3">
         <span className="w-full sm:w-auto sm:flex-1 font-medium">{voted === null ? 'Was this helpful?' : 'Thanks for the feedback.'}</span>
         {voted === null && <><Button variant="outline" className="rounded-full" disabled={voting} onClick={() => vote(true)} data-testid="button-helpful-yes"><ThumbsUp className="w-4 h-4 me-1.5" />Yes</Button><Button variant="outline" className="rounded-full" disabled={voting} onClick={() => vote(false)} data-testid="button-helpful-no"><ThumbsDown className="w-4 h-4 me-1.5" />No</Button></>}

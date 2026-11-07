@@ -8,22 +8,45 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { list, useRun } from '@/lib/platform';
 import { fileUrl, type R } from '@/lib/api';
-import { amount, when, D } from '@/lib/format';
+import { amount, when, D, Decimal } from '@/lib/format';
 import { StatusChip, ActionSheet, FilePick } from '@/components/app/kit';
 import { assetImage } from '@/components/app/domain';
 import { useAdmin, DataTable, AdminTitle, userLabel } from './shell';
 import { usePrompt } from './parts';
 
-const blank = { type: 'property', title: '', description: '', location: '', category: '', status: 'active' as string, total_units: '1', available_units: '1', currency: 'USDT', capital_required: '', profit_rate_basis: 'hour', profit_rate_value: '', min_duration: '', max_duration: '', rates: { minute: '', hour: '', day: '' }, images: [] as string[], specs: [] as [string, string][], discount_rules: '', scheduled_changes: '' };
+type RateBasis = 'minute' | 'hour' | 'day';
+type ScheduledRow = { at: string; basis: RateBasis; value: string; applied: boolean; raw?: R };
+const toLocalDateTime = (value: unknown) => {
+  const date = new Date(String(value ?? ''));
+  return Number.isFinite(date.getTime()) ? new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
+};
+const rateInput = (value: unknown) => {
+  const text = String(value ?? '');
+  return /^\d{1,18}(\.\d{1,18})?$/.test(text) ? D(text).toDecimalPlaces(3, Decimal.ROUND_HALF_UP).toFixed(3) : text;
+};
+const parseScheduledRows = (value: unknown): ScheduledRow[] => {
+  let parsed = value;
+  if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { return []; } }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((item) => {
+    const raw = (item && typeof item === 'object' ? item : {}) as R;
+    const rawRates = raw.rates && typeof raw.rates === 'object' ? raw.rates as R : raw;
+    const basis = (['minute', 'hour', 'day'].includes(String(raw.profit_rate_basis))
+      ? String(raw.profit_rate_basis)
+      : (['minute', 'hour', 'day'].find((key) => rawRates[key] !== undefined) || 'hour')) as RateBasis;
+    return { at: toLocalDateTime(raw.at), basis, value: rateInput(rawRates[basis]), applied: Boolean(raw.applied), raw };
+  });
+};
+const blank = { type: 'property', title: '', description: '', location: '', category: '', status: 'active' as string, total_units: '1', available_units: '1', currency: 'USDT', capital_required: '', profit_rate_basis: 'hour', profit_rate_value: '', min_duration: '', max_duration: '', rates: { minute: '', hour: '', day: '' }, images: [] as string[], specs: [] as [string, string][], discount_rules: '', scheduled_changes: [] as ScheduledRow[] };
 
 function AssetEditor({ a, onDone }: { a: R | null; onDone: () => void }) {
   const { state } = useAdmin();
   const { run, pending } = useRun('admin');
-  const [f, setF] = useState(() => a ? { ...blank, ...a, status: a.status === 'disabled' ? 'inactive' : String(a.status || 'active'), total_units: String(a.total_units ?? 1), available_units: String(a.available_units ?? 1), capital_required: String(a.capital_required ?? ''), profit_rate_basis: String(a.profit_rate_basis ?? 'hour'), profit_rate_value: String(a.profit_rate_value ?? (a.rates as R)?.[String(a.profit_rate_basis ?? 'hour')] ?? ''), min_duration: String(a.min_duration ?? ''), max_duration: String(a.max_duration ?? ''), rates: { minute: String((a.rates as R)?.minute ?? ''), hour: String((a.rates as R)?.hour ?? ''), day: String((a.rates as R)?.day ?? '') }, images: Array.isArray(a.images) ? a.images.map(String) : [], specs: Object.entries((a.specs as R) || {}).map(([k, v]) => [k, String(v)] as [string, string]), discount_rules: a.discount_rules ? JSON.stringify(a.discount_rules) : '', scheduled_changes: a.scheduled_changes ? JSON.stringify(a.scheduled_changes) : '' } : blank);
+  const [f, setF] = useState(() => a ? { ...blank, ...a, status: a.status === 'disabled' ? 'inactive' : String(a.status || 'active'), total_units: String(a.total_units ?? 1), available_units: String(a.available_units ?? 1), capital_required: String(a.capital_required ?? ''), profit_rate_basis: String(a.profit_rate_basis ?? 'hour'), profit_rate_value: String(a.profit_rate_value ?? (a.rates as R)?.[String(a.profit_rate_basis ?? 'hour')] ?? ''), min_duration: String(a.min_duration ?? ''), max_duration: String(a.max_duration ?? ''), rates: { minute: rateInput((a.rates as R)?.minute), hour: rateInput((a.rates as R)?.hour), day: rateInput((a.rates as R)?.day) }, images: Array.isArray(a.images) ? a.images.map(String) : [], specs: Object.entries((a.specs as R) || {}).map(([k, v]) => [k, String(v)] as [string, string]), discount_rules: a.discount_rules ? JSON.stringify(a.discount_rules) : '', scheduled_changes: parseScheduledRows(a.scheduled_changes) } : blank);
   const [img, setImg] = useState('');
   const set = (k: string, v: unknown) => setF({ ...f, [k]: v } as typeof f);
   const setProfitRate = (basis: 'minute' | 'hour' | 'day', value: string) => {
-    const valid = /^\d{1,18}(\.\d{0,18})?$/.test(value);
+    const valid = /^\d{1,18}(\.\d{0,3})?$/.test(value);
     if (!value.trim()) {
       setF({ ...f, profit_rate_basis: basis, profit_rate_value: '', rates: { minute: '', hour: '', day: '' } });
       return;
@@ -36,22 +59,26 @@ function AssetEditor({ a, onDone }: { a: R | null; onDone: () => void }) {
     const perMinute = basis === 'minute' ? rate : basis === 'hour' ? rate.div(60) : rate.div(1440);
     const perHour = basis === 'minute' ? rate.times(60) : basis === 'hour' ? rate : rate.div(24);
     const perDay = basis === 'minute' ? rate.times(1440) : basis === 'hour' ? rate.times(24) : rate;
-    const fixed = (n: typeof rate) => n.toDecimalPlaces(18).toFixed(18);
+    const fixed = (n: typeof rate) => n.toDecimalPlaces(3, Decimal.ROUND_HALF_UP).toFixed(3);
     setF({ ...f, profit_rate_basis: basis, profit_rate_value: value, rates: { minute: fixed(perMinute), hour: fixed(perHour), day: fixed(perDay) } });
   };
-  const bad = (s: string) => { if (!s.trim()) return false; try { JSON.parse(s); return false; } catch { return true; } };
-  const parse = (s: string) => (s.trim() ? JSON.parse(s) : null);
-  const jsonErr = bad(f.discount_rules) ? 'Discount rules are not valid JSON.' : bad(f.scheduled_changes) ? 'Scheduled price changes are not valid JSON.' : '';
-  const validMoney = (value: string) => /^\d{1,18}(\.\d{1,18})?$/.test(value) && !D(value).isNegative();
+  const parse = (s: string) => { if (!s.trim()) return null; try { return JSON.parse(s); } catch { return null; } };
+  const validMoney = (value: string) => /^\d{1,18}(\.\d{1,3})?$/.test(value) && !D(value).isNegative();
   const profitSetupValid = validMoney(f.capital_required) && D(f.capital_required).gt(0) && validMoney(f.profit_rate_value) && D(f.profit_rate_value).gt(0);
+  const scheduleErr = f.scheduled_changes.some((row) => !row.applied && (!row.at || !Number.isFinite(new Date(row.at).getTime()) || !validMoney(row.value)));
   const coins = list(state.currencies).map((c) => String(c.code));
-  const save = () => jsonErr ? undefined : run('asset-save', {
+  const save = () => scheduleErr ? undefined : run('asset-save', {
     ...(a?.id ? { id: a.id } : {}), type: f.type, title: f.title, description: f.description, location: f.location, category: f.category, status: f.status,
     total_units: Number(f.total_units), available_units: Number(f.available_units), currency: f.currency,
     capital_required: f.capital_required, profit_rate_basis: f.profit_rate_basis, profit_rate_value: f.profit_rate_value,
     min_duration: f.min_duration ? Number(f.min_duration) : null, max_duration: f.max_duration ? Number(f.max_duration) : null,
     rates: Object.fromEntries(Object.entries(f.rates).map(([k, v]) => [k, v === '' ? null : v])),
-    images: f.images, specs: Object.fromEntries(f.specs.filter(([k]) => k)), discount_rules: parse(f.discount_rules), scheduled_changes: parse(f.scheduled_changes),
+    images: f.images, specs: Object.fromEntries(f.specs.filter(([k]) => k)), discount_rules: parse(f.discount_rules),
+    scheduled_changes: f.scheduled_changes.map((row) => {
+      const raw = row.raw ?? {};
+      const rawRates = raw.rates && typeof raw.rates === 'object' ? raw.rates as R : Object.fromEntries(['minute', 'hour', 'day'].filter((key) => raw[key] !== undefined).map((key) => [key, raw[key]]));
+      return { ...raw, at: new Date(row.at).toISOString(), profit_rate_basis: row.basis, rates: { ...rawRates, [row.basis]: row.value } };
+    }),
   }, { success: 'Asset saved', onSuccess: onDone });
 
   return (
@@ -68,16 +95,26 @@ function AssetEditor({ a, onDone }: { a: R | null; onDone: () => void }) {
         <div><Label className="text-xs">Available</Label><Input type="number" value={f.available_units} onChange={(e) => set('available_units', e.target.value)} className="rounded-xl mt-1" /></div>
         <div><Label className="text-xs">Currency</Label><Select value={f.currency} onValueChange={(v) => set('currency', v)}><SelectTrigger className="rounded-xl mt-1"><SelectValue /></SelectTrigger><SelectContent>{(coins.length ? coins : ['USDT']).map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select></div>
       </div>
-      <div><Label className="text-xs">Capital required per unit</Label><Input type="text" inputMode="decimal" value={f.capital_required} onChange={(e) => set('capital_required', e.target.value)} placeholder="e.g. 100" className="rounded-xl mt-1 num" data-testid="input-capital-required" /><p className="text-[11px] text-muted-foreground mt-1">This amount stays locked for the full rental term.</p></div>
+      <div><Label className="text-xs">Capital required per unit</Label><Input type="text" inputMode="decimal" value={f.capital_required} onChange={(e) => set('capital_required', e.target.value)} placeholder="e.g. 100.000" className="rounded-xl mt-1 num" data-testid="input-capital-required" /><p className="text-[11px] text-muted-foreground mt-1">Enter up to 3 decimal places. This amount stays locked for the full rental term.</p></div>
       <div className="rounded-2xl border p-3 space-y-2">
         <div className="text-xs font-semibold">Profit schedule ({f.currency} per unit)</div>
-        <p className="text-[11px] text-muted-foreground">Edit any one period. The other rates recalculate using 60 minutes per hour and 24 hours per day.</p>
+        <p className="text-[11px] text-muted-foreground">Enter up to 3 decimal places. Edit any one period; the other rates recalculate using 60 minutes per hour and 24 hours per day.</p>
         <div className="grid grid-cols-3 gap-2">{(['minute', 'hour', 'day'] as const).map((m) => <div key={m}><Label className="text-xs">Profit per {m}</Label><Input type="text" inputMode="decimal" value={f.rates[m]} onChange={(e) => setProfitRate(m, e.target.value)} className="rounded-xl mt-1 num" data-testid={`input-rate-${m}`} /></div>)}</div>
         <div className="grid grid-cols-2 gap-2"><div><Label className="text-xs">Min duration (min)</Label><Input type="number" value={f.min_duration} onChange={(e) => set('min_duration', e.target.value)} className="rounded-xl mt-1" /></div><div><Label className="text-xs">Max duration (min)</Label><Input type="number" value={f.max_duration} onChange={(e) => set('max_duration', e.target.value)} className="rounded-xl mt-1" /></div></div>
-        <div><Label className="text-xs">Legacy discount rules (not applied to profit)</Label><Input value={f.discount_rules} onChange={(e) => set('discount_rules', e.target.value)} placeholder='[{"min_units":5,"percent":7.5}]' className="rounded-xl mt-1 font-mono text-xs" /></div>
-        <div><Label className="text-xs">Scheduled profit-rate changes (JSON)</Label><Input value={f.scheduled_changes} onChange={(e) => set('scheduled_changes', e.target.value)} placeholder='[{"at":"2026-12-01T00:00:00.000Z","hour":"4.20"}]' className="rounded-xl mt-1 font-mono text-xs" /></div>
-        {jsonErr && <p className="text-sm text-destructive" data-testid="text-asset-json-error">{jsonErr} Fix it before saving; the stored configuration is unchanged.</p>}
-        {f.status === 'active' && !profitSetupValid && <p className="text-sm text-destructive">An active rental needs positive capital and a positive profit rate.</p>}
+        <div className="rounded-xl bg-muted/60 p-3 text-xs text-muted-foreground">Legacy discount settings are kept as-is and do not change the new rental profit schedule.</div>
+        <div className="rounded-2xl border p-3 space-y-3">
+          <div className="flex items-center justify-between gap-2"><div><div className="text-xs font-semibold">Scheduled rate changes</div><p className="text-[11px] text-muted-foreground">Choose when the new rate starts and enter the rate for one period.</p></div><Button type="button" size="sm" variant="outline" className="rounded-full shrink-0" onClick={() => set('scheduled_changes', [...f.scheduled_changes, { at: '', basis: 'hour', value: '', applied: false }])} data-testid="button-add-rate-change"><Plus className="w-3.5 h-3.5 me-1" />Add rate</Button></div>
+          {f.scheduled_changes.map((row, i) => <div key={i} className="rounded-xl bg-muted/50 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2"><Label className="text-xs">Change {i + 1}{row.applied ? ' · Already applied' : ''}</Label><Button type="button" size="icon" variant="ghost" className="h-8 w-8" onClick={() => set('scheduled_changes', f.scheduled_changes.filter((_, j) => j !== i))} aria-label={`Remove scheduled rate ${i + 1}`}><X className="w-4 h-4" /></Button></div>
+            <div><Label className="text-xs">Starts at</Label><Input type="datetime-local" disabled={row.applied} value={row.at} onChange={(e) => set('scheduled_changes', f.scheduled_changes.map((item, j) => j === i ? { ...item, at: e.target.value } : item))} className="rounded-xl mt-1" data-testid={`input-scheduled-at-${i}`} /></div>
+            <div className="grid grid-cols-2 gap-2">
+              <div><Label className="text-xs">Rate period</Label><Select disabled={row.applied} value={row.basis} onValueChange={(value) => { const basis=value as RateBasis; set('scheduled_changes', f.scheduled_changes.map((item, j) => { if (j !== i) return item; const oldRates=item.raw?.rates as R|undefined; return { ...item, basis, value: String(oldRates?.[basis] ?? item.value) }; })); }}><SelectTrigger className="rounded-xl mt-1"><SelectValue /></SelectTrigger><SelectContent>{(['minute', 'hour', 'day'] as const).map((basis) => <SelectItem key={basis} value={basis}>Per {basis}</SelectItem>)}</SelectContent></Select></div>
+              <div><Label className="text-xs">Profit per {row.basis}</Label><Input type="text" inputMode="decimal" disabled={row.applied} value={row.value} onChange={(e) => set('scheduled_changes', f.scheduled_changes.map((item, j) => j === i ? { ...item, value: e.target.value } : item))} placeholder="e.g. 4.200" className="rounded-xl mt-1 num" data-testid={`input-scheduled-rate-${i}`} /></div>
+            </div>
+          </div>)}
+          {scheduleErr && <p className="text-sm text-destructive" data-testid="text-schedule-error">Enter a valid start time and a non-negative amount with up to 3 decimal places for each scheduled rate.</p>}
+        </div>
+        {f.status === 'active' && !profitSetupValid && <p className="text-sm text-destructive">An active rental needs positive capital and a positive profit rate. Enter each amount with no more than 3 decimal places.</p>}
       </div>
       <div className="rounded-2xl border p-3 space-y-2">
         <div className="text-xs font-semibold">Specs</div>
@@ -89,7 +126,7 @@ function AssetEditor({ a, onDone }: { a: R | null; onDone: () => void }) {
         <div className="flex gap-2 flex-wrap">{f.images.map((p) => <div key={p} className="relative w-20 h-16 rounded-xl overflow-hidden"><img src={fileUrl(p)} alt="" className="w-full h-full object-cover" /><button onClick={() => set('images', f.images.filter((x) => x !== p))} className="absolute top-0.5 end-0.5 bg-black/60 rounded-full p-0.5"><X className="w-3 h-3 text-white" /></button></div>)}</div>
         <FilePick value={img} onChange={(p) => { if (p) set('images', [...f.images, p]); setImg(''); }} accept="image/*" label="Upload image" testId="input-asset-image" />
       </div>
-      <Button className="w-full rounded-full h-11" disabled={pending || !f.title || (f.status === 'active' && !profitSetupValid)} onClick={save} data-testid="button-save-asset">Save asset</Button>
+      <Button className="w-full rounded-full h-11" disabled={pending || scheduleErr || !f.title || (f.status === 'active' && !profitSetupValid)} onClick={save} data-testid="button-save-asset">Save asset</Button>
     </div>
   );
 }

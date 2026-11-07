@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePlatform, list, useRun } from '@/lib/platform';
 import { exportUrl, fileUrl, type R } from '@/lib/api';
-import { amount, num, when, D, dmax0, Decimal, ledgerLabel } from '@/lib/format';
+import { amount, num, when, D, dmax0, Decimal, ledgerLabel, ledgerMovement, cooldownLabel, cooldownAdjective, withdrawalCooldownMinutes } from '@/lib/format';
 import { PageHeader, PageSkeleton, ErrorState, EmptyState, StatusChip, SignInPrompt, ActionSheet, CoinIcon, FilePick } from '@/components/app/kit';
 import { cn } from '@/lib/utils';
 
@@ -137,9 +137,11 @@ function DepositSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
 }
 
 function WithdrawSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const { state, user } = usePlatform();
+  const { state, user, settings } = usePlatform();
   const { run, pending } = useRun('user');
   const currencies = list(state.currencies).filter((c) => c.enabled !== false);
+  const addressCooldownMinutes = withdrawalCooldownMinutes(settings);
+  const addressCooldownText = cooldownLabel(addressCooldownMinutes);
   const [coin, setCoin] = useState('');
   const [net, setNet] = useState('');
   const [addrId, setAddrId] = useState('');
@@ -169,7 +171,7 @@ function WithdrawSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o
     return <ActionSheet open={open} onOpenChange={onOpenChange} title="Withdraw"><EmptyState icon={ShieldOff} title="Withdrawals are on hold" body="Your account needs identity verification before funds can leave. Complete the requested steps to restore withdrawals." action={<a href="/kyc" className="rounded-full bg-primary text-primary-foreground px-5 py-2.5 text-sm font-semibold">Open verification</a>} /></ActionSheet>;
   }
   return (
-    <ActionSheet open={open} onOpenChange={onOpenChange} title="Withdraw" description="Withdrawals go only to saved addresses that have passed the 24-hour safety cooldown.">
+    <ActionSheet open={open} onOpenChange={onOpenChange} title="Withdraw" description={`Withdrawals go only to saved addresses that have passed the ${cooldownAdjective(addressCooldownMinutes)} security cooldown.`}>
       {confirmId ? (
         <div className="space-y-4 rise">
           <p className="text-sm">We emailed a confirmation code. Enter it to release this withdrawal.</p>
@@ -188,7 +190,7 @@ function WithdrawSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o
                     <SelectTrigger className="mt-1 h-12 rounded-2xl" data-testid="select-address"><SelectValue placeholder="Choose a saved address" /></SelectTrigger>
                     <SelectContent>{book.map((a) => <SelectItem key={String(a.id)} value={String(a.id)}>{a.label} · {String(a.address).slice(0, 8)}…{String(a.address).slice(-6)}</SelectItem>)}</SelectContent>
                   </Select>
-                ) : <p className="text-sm text-muted-foreground mt-1">No saved {coin}/{net} address. Add one in the Address book tab; it becomes usable after 24 hours.</p>}
+                ) : <p className="text-sm text-muted-foreground mt-1">No saved {coin}/{net} address. Add one under Profile → Withdrawal addresses. It becomes usable after {addressCooldownText}.</p>}
                 {cooling && <p className="text-xs text-amber-600 mt-1">This address unlocks {when(addr?.usable_after)}.</p>}
               </div>
               <div>
@@ -257,7 +259,7 @@ export default function WalletPage() {
   if (!user) return (
     <div className="space-y-5">
       <PageHeader title={t('wallet')} icon={WalletIcon} />
-      <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">{currencies.map((c) => <div key={String(c.code)} className="rounded-3xl border bg-card p-4 flex items-center gap-3"><CoinIcon code={String(c.code)} /><div><div className="font-semibold">{c.code}</div><div className="num text-sm text-muted-foreground">0.00</div></div></div>)}</div>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">{currencies.map((c) => <div key={String(c.code)} className="rounded-3xl border bg-card p-4 flex items-center gap-3"><CoinIcon code={String(c.code)} /><div><div className="font-semibold">{c.code}</div><div className="num text-sm text-muted-foreground">{amount(0)}</div></div></div>)}</div>
       <SignInPrompt />
     </div>
   );
@@ -309,7 +311,7 @@ export default function WalletPage() {
                 <div key={String(l.id)} className="flex items-center gap-3 p-4" data-testid={`row-ledger-${l.id}`}>
                   <CoinIcon code={String(l.currency)} size={30} />
                   <div className="flex-1 min-w-0"><div className="text-sm font-medium capitalize">{ledgerLabel(l.type)}</div><div className="text-xs text-muted-foreground">{when(l.created_at)}</div></div>
-                  <div className="text-end"><div className={cn('num font-semibold', !D(l.amount).isNegative() ? 'text-emerald-600 dark:text-emerald-400' : '')}>{!D(l.amount).isNegative() ? '+' : ''}{amount(l.amount)}</div><div className="num text-[11px] text-muted-foreground">Bal {amount(l.balance_after)}</div></div>
+                  <div className="text-end"><div className={cn('num font-semibold', l.type === 'rental_principal_release' || (!['rental_principal_lock'].includes(String(l.type)) && !D(l.amount).isNegative()) ? 'text-emerald-600 dark:text-emerald-400' : '')}>{ledgerMovement(l)} {l.currency}</div><div className="num text-[11px] text-muted-foreground">Balance {amount(l.balance_after)}</div></div>
                 </div>
               ))}
             </div>
@@ -350,7 +352,7 @@ export default function WalletPage() {
                     <Button size="icon" variant="ghost" className="rounded-full" disabled={pending} onClick={() => run('address-delete', { id: a.id }, { success: 'Address removed' })} data-testid={`button-delete-address-${a.id}`}><Trash2 className="w-4 h-4" /></Button>
                   </div>
                 );
-              }) : <EmptyState icon={BookUser} title="Address book is empty" body="Save destination addresses here. New addresses unlock after 24 hours." />}
+              }) : <EmptyState icon={BookUser} title="Address book is empty" body={`Save destination addresses in Profile. New addresses unlock after ${cooldownLabel(withdrawalCooldownMinutes((state.settings as R) || {}))}.`} />}
             </div>
             <div className="rounded-3xl border bg-card p-5 space-y-3 h-fit">
               <h3 className="font-semibold flex items-center gap-2"><Plus className="w-4 h-4" />New address</h3>
@@ -363,7 +365,7 @@ export default function WalletPage() {
               {!addrValid && <p className="text-xs text-destructive">This does not look like a valid {addr.network} address.</p>}
               <Input placeholder="Memo / tag (optional)" value={addr.memo} onChange={(e) => setAddr({ ...addr, memo: e.target.value })} className="rounded-xl" data-testid="input-address-memo" />
               <Button className="w-full rounded-full" disabled={pending || !addr.label || !addr.currency || !addr.network || !addr.address || !addrValid} data-testid="button-save-address"
-                onClick={() => run('address-create', { ...addr, memo: addr.memo || undefined }, { success: 'Address saved. Usable in 24 hours.', onSuccess: () => setAddr({ label: '', currency: '', network: '', address: '', memo: '' }) })}>Save address</Button>
+                onClick={() => run('address-create', { ...addr, memo: addr.memo || undefined }, { success: `Address saved. Usable after ${cooldownLabel(withdrawalCooldownMinutes((state.settings as R) || {}))}.`, onSuccess: () => setAddr({ label: '', currency: '', network: '', address: '', memo: '' }) })}>Save address</Button>
             </div>
           </div>
         </TabsContent>

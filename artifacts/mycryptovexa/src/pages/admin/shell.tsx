@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { useGetAdminWorkspace, getGetAdminWorkspaceQueryKey, adminAccountAction } from '@workspace/api-client-react';
+import { useGetAdminWorkspace, getGetAdminWorkspaceQueryKey, getGetBootstrapQueryKey, adminAccountAction } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
-import { LayoutDashboard, Users, Building2, Timer, ArrowDownToLine, ArrowUpFromLine, ShieldCheck, GitBranch, Headset, BookOpen, FileText, Mail, Settings, ScrollText, BarChart3, ChevronsLeft, LogOut, Fingerprint, Moon, Sun, Menu, Search, Download } from 'lucide-react';
+import { LayoutDashboard, Users, Building2, Timer, ArrowDownToLine, ArrowUpFromLine, ShieldCheck, GitBranch, Headset, BookOpen, FileText, Mail, Settings, ScrollText, BarChart3, ChevronsLeft, LogOut, Fingerprint, Moon, Sun, Menu, Search, Download, RefreshCw } from 'lucide-react';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Input } from '@/components/ui/input';
 import { usePlatform, list } from '@/lib/platform';
@@ -46,7 +46,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const { resolved, setTheme } = useTheme();
   const bootAdmin = (boot.adminUser || boot.admin) as R | null | undefined;
-  const ws = useGetAdminWorkspace({ query: { enabled: !!bootAdmin, queryKey: [...getGetAdminWorkspaceQueryKey(),bootAdmin?.id??'signed-out'], refetchInterval: 15000, retry: 1 } });
+  const ws = useGetAdminWorkspace({ query: { enabled: !!bootAdmin, queryKey: [...getGetAdminWorkspaceQueryKey(),bootAdmin?.id??'signed-out'], staleTime: Infinity, refetchOnMount: false, retry: 1 } });
   useEffect(()=>{
     qc.removeQueries({queryKey:getGetAdminWorkspaceQueryKey(),predicate:q=>q.queryKey.at(-1)!==bootAdmin?.id});
   },[qc,bootAdmin?.id]);
@@ -78,7 +78,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const logout = async () => {
     try { await adminAccountAction('logout', {}, csrfOpts()); } finally {
       qc.removeQueries({queryKey:getGetAdminWorkspaceQueryKey()});
-      await qc.invalidateQueries();
+      await qc.invalidateQueries({ queryKey: getGetBootstrapQueryKey() });
       navigate('/admin/login');
     }
   };
@@ -115,6 +115,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
             <div className="ms-auto flex items-center gap-2">
               <span className="hidden sm:inline text-sm text-muted-foreground">{admin.email}</span>
               <span className="text-[11px] rounded-full bg-accent text-accent-foreground px-2 py-0.5 font-semibold uppercase">{role}</span>
+              <button className="p-2 rounded-full hover:bg-muted disabled:opacity-50" onClick={() => void ws.refetch()} disabled={ws.isFetching} title="Refresh console data" aria-label="Refresh console data" data-testid="button-admin-refresh"><RefreshCw className={cn('w-4 h-4', ws.isFetching && 'animate-spin')} /></button>
               <button className="p-2 rounded-full hover:bg-muted" onClick={() => setTheme(resolved === 'dark' ? 'light' : 'dark')} data-testid="button-admin-theme">{resolved === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}</button>
               <button className="p-2 rounded-full hover:bg-muted" onClick={logout} data-testid="button-admin-logout"><LogOut className="w-4 h-4" /></button>
             </div>
