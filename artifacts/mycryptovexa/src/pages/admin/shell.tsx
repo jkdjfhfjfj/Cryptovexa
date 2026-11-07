@@ -99,10 +99,15 @@ export function AdminShell({ children }: { children: ReactNode }) {
       <div className="min-h-[100dvh] flex bg-background">
         <aside className={cn('hidden lg:flex flex-col bg-sidebar text-sidebar-foreground border-e border-sidebar-border sticky top-0 h-[100dvh] transition-[width] duration-300', collapsed ? 'w-[76px]' : 'w-64')}>
           <div className="h-16 flex items-center px-5 border-b border-sidebar-border"><Logo name={brand.name} logo={brand.logo} size={28} className={collapsed ? '[&>span:last-child]:hidden' : ''} /></div>
-          <div className="flex-1 overflow-y-auto no-scrollbar">{nav(collapsed)}</div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain no-scrollbar">{nav(collapsed)}</div>
           <button className="m-3 flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-sidebar-foreground/60 hover:bg-sidebar-accent" onClick={() => setCollapsed(!collapsed)} data-testid="button-collapse"><ChevronsLeft className={cn('w-4 h-4 transition-transform', collapsed && 'rotate-180')} />{!collapsed && 'Collapse'}</button>
         </aside>
-        <Sheet open={mobile} onOpenChange={setMobile}><SheetContent side="left" className="bg-sidebar text-sidebar-foreground p-0 w-72"><div className="h-16 flex items-center px-5"><Logo name={brand.name} size={28} /></div>{nav(false)}</SheetContent></Sheet>
+        <Sheet open={mobile} onOpenChange={setMobile}>
+          <SheetContent side="left" className="flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden overscroll-contain bg-sidebar p-0 text-sidebar-foreground w-72">
+            <div className="h-16 shrink-0 flex items-center px-5 border-b border-sidebar-border"><Logo name={brand.name} size={28} /></div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y" data-testid="admin-mobile-nav-scroll">{nav(false)}</div>
+          </SheetContent>
+        </Sheet>
         <div className="flex-1 min-w-0">
           <header className="h-16 sticky top-0 z-30 bg-background/85 backdrop-blur-xl border-b flex items-center gap-3 px-4 md:px-6">
             <button className="lg:hidden p-2 rounded-xl hover:bg-muted" onClick={() => setMobile(true)} data-testid="button-admin-menu"><Menu className="w-5 h-5" /></button>
