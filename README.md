@@ -33,7 +33,7 @@ The private development preview supports first-administrator setup at `/admin/lo
 - Deposit credit keys, billing-period keys and withdrawal settlement keys are unique. UI submissions include request UUIDs for replay protection.
 - Withdrawals reserve balances. Rejection unlocks the reserve, while confirmed settlement creates the debit and clears the reserve.
 - No funds are transferred without configuration. Automatic service failures enter manual review; ambiguous requests are not automatically resubmitted.
-- Uploaded KYC/proofs are private App Storage objects. File bytes are not stored in the database. Access is checked on each read.
+- Uploaded KYC/proofs stay private and are authorized on each read. Replit uses App Storage; self-hosted VPS deployments can set `LOCAL_OBJECT_STORAGE_DIR` for local files. File bytes are not stored in PostgreSQL, and VPS file storage needs restricted permissions plus separate encrypted backups.
 - Binance and SMTP secret values are AES-256-GCM encrypted. They are never returned in administrative responses or written to request logs.
 - The worker processes billing, expiry, renewal, withdrawal sending/polling, deposit hints, queued mail and daily reconciliation.
 - Offline mode is a read-only app shell. Account, financial and private API responses are not cached by the service worker.

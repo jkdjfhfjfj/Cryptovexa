@@ -42,6 +42,7 @@ app.use(["/api/v1/actions","/api/admin/actions"],rateLimit({windowMs:60000,limit
 app.use("/api",(req,res,next)=>{
   res.set("Cache-Control","no-store");
   if(["GET","HEAD","OPTIONS"].includes(req.method)){next();return;}
+  if(process.env.LOCAL_OBJECT_STORAGE_DIR&&req.method==="PUT"&&/^\/v1\/uploads\/local\/[0-9a-f-]{36}$/i.test(req.path)){next();return;}
   const a=req.cookies?.vexa_csrf,b=req.get("x-csrf-token");
   if(typeof a!=="string"||typeof b!=="string"||Buffer.byteLength(a)!==Buffer.byteLength(b)||!timingSafeEqual(Buffer.from(a),Buffer.from(b))){
     res.status(403).json({error:"Security token expired. Reload the page and try again."});return;

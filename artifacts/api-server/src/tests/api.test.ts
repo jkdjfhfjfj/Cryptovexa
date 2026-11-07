@@ -189,6 +189,8 @@ test("A real private upload is owner/reviewer-only until attached as a finance p
   try{
     const put=await fetch(upload.uploadURL,{method:"PUT",headers:{"Content-Type":"image/png"},body:new Uint8Array(bytes)});
     strict.equal(put.status,200);
+    const replay=await fetch(upload.uploadURL,{method:"PUT",headers:{"Content-Type":"image/png"},body:new Uint8Array(bytes)});
+    strict.equal(replay.status,409);
     const own=await request("user",`/v1/files/${upload.id}`);strict.equal(own.status,200);
     strict.equal(own.headers.get("content-type"),"image/png");
     strict.deepEqual(Buffer.from(await own.arrayBuffer()),bytes);

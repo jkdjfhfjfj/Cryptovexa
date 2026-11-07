@@ -1,5 +1,19 @@
-import { randomUUID } from 'crypto';
-import { Readable } from 'stream';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
+import {
+  chmod,
+  link,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { File, Storage } from '@google-cloud/storage';
 
 import {
@@ -11,6 +25,9 @@ import {
 } from './objectAcl';
 
 const REPLIT_SIDECAR_ENDPOINT = 'http://127.0.0.1:1106';
+const LOCAL_UPLOAD_TTL_SECONDS = 900;
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export const objectStorageClient = new Storage({
   credentials: {
@@ -38,8 +55,112 @@ export class ObjectNotFoundError extends Error {
   }
 }
 
+type StoredMetadata = {
+  contentType?: string;
+  metadata?: Record<string, string>;
+};
+
+class LocalStoredFile {
+  readonly name: string;
+  private readonly filePath: string;
+  private readonly metadataPath: string;
+
+  constructor(root: string, id: string) {
+    this.name = id;
+    this.filePath = join(root, id);
+    this.metadataPath = join(root, `${id}.metadata.json`);
+  }
+
+  async exists(): Promise<[boolean]> {
+    try {
+      await stat(this.filePath);
+      return [true];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [false];
+      throw error;
+    }
+  }
+
+  async getMetadata(): Promise<[Record<string, unknown>]> {
+    const fileStat = await stat(this.filePath);
+    const stored = await this.readStoredMetadata();
+    return [{
+      size: fileStat.size,
+      contentType: stored.contentType,
+      metadata: stored.metadata ?? {},
+    }];
+  }
+
+  createReadStream() {
+    return createReadStream(this.filePath);
+  }
+
+  async setContentType(contentType: string): Promise<void> {
+    await this.saveStoredMetadata({ contentType, metadata: {} });
+  }
+
+  async setMetadata({
+    metadata,
+  }: {
+    metadata: Record<string, string>;
+  }): Promise<void> {
+    const stored = await this.readStoredMetadata();
+    await this.saveStoredMetadata({
+      ...stored,
+      metadata: { ...(stored.metadata ?? {}), ...metadata },
+    });
+  }
+
+  async delete(options: { ignoreNotFound?: boolean } = {}): Promise<void> {
+    try {
+      await unlink(this.filePath);
+      await unlink(this.metadataPath).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      });
+    } catch (error) {
+      if (
+        options.ignoreNotFound &&
+        (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ) return;
+      throw error;
+    }
+  }
+
+  private async readStoredMetadata(): Promise<StoredMetadata> {
+    try {
+      return JSON.parse(await readFile(this.metadataPath, 'utf8')) as StoredMetadata;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+      throw error;
+    }
+  }
+
+  private async saveStoredMetadata(value: StoredMetadata): Promise<void> {
+    const temporaryPath = `${this.metadataPath}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporaryPath, JSON.stringify(value), {
+        flag: 'wx',
+        mode: 0o600,
+      });
+      await rename(temporaryPath, this.metadataPath);
+    } finally {
+      await rm(temporaryPath, { force: true });
+    }
+  }
+}
+
 export class ObjectStorageService {
   constructor() {}
+
+  isLocalStorageEnabled(): boolean {
+    return Boolean(process.env.LOCAL_OBJECT_STORAGE_DIR?.trim());
+  }
+
+  private getLocalObjectRoot(): string {
+    const root = process.env.LOCAL_OBJECT_STORAGE_DIR?.trim();
+    if (!root) throw new Error('LOCAL_OBJECT_STORAGE_DIR is not configured');
+    return resolve(root);
+  }
 
   getPublicObjectSearchPaths(): Array<string> {
     const pathsStr = process.env.PUBLIC_OBJECT_SEARCH_PATHS || '';
@@ -111,7 +232,30 @@ export class ObjectStorageService {
     return new Response(webStream, { headers });
   }
 
-  async getObjectEntityUploadURL(): Promise<string> {
+  async getObjectEntityUploadURL({
+    origin,
+    contentType,
+    size,
+  }: {
+    origin?: string;
+    contentType?: string;
+    size?: number;
+  } = {}): Promise<string> {
+    if (this.isLocalStorageEnabled()) {
+      if (!origin || !contentType || !Number.isSafeInteger(size) || !size) {
+        throw new Error('Local upload requires origin, content type and size');
+      }
+      const objectId = randomUUID();
+      const expires = Math.floor(Date.now() / 1000) + LOCAL_UPLOAD_TTL_SECONDS;
+      const signature = signLocalUpload(objectId, expires, contentType, size);
+      const uploadUrl = new URL(`/api/v1/uploads/local/${objectId}`, origin);
+      uploadUrl.searchParams.set('expires', String(expires));
+      uploadUrl.searchParams.set('contentType', contentType);
+      uploadUrl.searchParams.set('size', String(size));
+      uploadUrl.searchParams.set('signature', signature);
+      return uploadUrl.toString();
+    }
+
     const privateObjectDir = this.getPrivateObjectDir();
     if (!privateObjectDir) {
       throw new Error(
@@ -138,6 +282,15 @@ export class ObjectStorageService {
       throw new ObjectNotFoundError();
     }
 
+    if (this.isLocalStorageEnabled()) {
+      const entityId = objectPath.slice('/objects/'.length);
+      if (!UUID_PATTERN.test(entityId)) throw new ObjectNotFoundError();
+      const localFile = new LocalStoredFile(this.getLocalObjectRoot(), entityId);
+      const [exists] = await localFile.exists();
+      if (!exists) throw new ObjectNotFoundError();
+      return localFile as unknown as File;
+    }
+
     const parts = objectPath.slice(1).split('/');
     if (parts.length < 2) {
       throw new ObjectNotFoundError();
@@ -160,6 +313,20 @@ export class ObjectStorageService {
   }
 
   normalizeObjectEntityPath(rawPath: string): string {
+    if (this.isLocalStorageEnabled()) {
+      try {
+        const url = new URL(rawPath);
+        const match = url.pathname.match(
+          /^\/api\/v1\/uploads\/local\/([0-9a-f-]{36})$/i,
+        );
+        if (match && UUID_PATTERN.test(match[1])) {
+          return `/objects/${match[1]}`;
+        }
+      } catch {
+        // Continue to the existing normalized/GCS path handling.
+      }
+    }
+
     if (!rawPath.startsWith('https://storage.googleapis.com/')) {
       return rawPath;
     }
@@ -178,6 +345,93 @@ export class ObjectStorageService {
 
     const entityId = rawObjectPath.slice(objectEntityDir.length);
     return `/objects/${entityId}`;
+  }
+
+  async storeLocalUpload({
+    objectId,
+    expires,
+    contentType,
+    size,
+    signature,
+    requestContentType,
+    stream,
+  }: {
+    objectId: string;
+    expires: string;
+    contentType: string;
+    size: number;
+    signature: string;
+    requestContentType: string | undefined;
+    stream: NodeJS.ReadableStream;
+  }): Promise<'stored' | 'invalid' | 'expired' | 'forbidden' | 'size_mismatch' | 'exists' | 'unavailable'> {
+    if (!this.isLocalStorageEnabled()) return 'unavailable';
+    if (
+      !UUID_PATTERN.test(objectId) ||
+      !Number.isSafeInteger(size) ||
+      size < 1 ||
+      size > MAX_UPLOAD_BYTES ||
+      !['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(contentType) ||
+      requestContentType !== contentType ||
+      !/^\d{10}$/.test(expires) ||
+      !/^[a-f0-9]{64}$/.test(signature)
+    ) return 'invalid';
+
+    const expiry = Number(expires);
+    const now = Math.floor(Date.now() / 1000);
+    if (expiry <= now || expiry > now + LOCAL_UPLOAD_TTL_SECONDS) return 'expired';
+    if (!verifyLocalUpload(objectId, expiry, contentType, size, signature)) {
+      return 'forbidden';
+    }
+
+    const root = this.getLocalObjectRoot();
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    await chmod(root, 0o700);
+    const localFile = new LocalStoredFile(root, objectId);
+    const [alreadyExists] = await localFile.exists();
+    if (alreadyExists) return 'exists';
+
+    const temporaryPath = join(root, `.${objectId}.${randomUUID()}.upload`);
+    let receivedBytes = 0;
+    const sizeGuard = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        receivedBytes += chunk.length;
+        if (receivedBytes > size || receivedBytes > MAX_UPLOAD_BYTES) {
+          callback(new Error('upload_size_mismatch'));
+          return;
+        }
+        callback(null, chunk);
+      },
+    });
+
+    try {
+      await pipeline(
+        stream,
+        sizeGuard,
+        createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600 }),
+      );
+      if (receivedBytes !== size) {
+        await rm(temporaryPath, { force: true });
+        return 'size_mismatch';
+      }
+      try {
+        await link(temporaryPath, join(root, objectId));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') return 'exists';
+        throw error;
+      }
+      try {
+        await localFile.setContentType(contentType);
+      } catch (error) {
+        await rm(join(root, objectId), { force: true });
+        throw error;
+      }
+      return 'stored';
+    } catch (error) {
+      if ((error as Error).message === 'upload_size_mismatch') return 'size_mismatch';
+      throw error;
+    } finally {
+      await rm(temporaryPath, { force: true });
+    }
   }
 
   async trySetObjectEntityAclPolicy(
@@ -209,6 +463,33 @@ export class ObjectStorageService {
       requestedPermission: requestedPermission ?? ObjectPermission.READ,
     });
   }
+}
+
+function signLocalUpload(
+  objectId: string,
+  expires: number,
+  contentType: string,
+  size: number,
+): string {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) throw new Error('SESSION_SECRET is required for local uploads');
+  return createHmac('sha256', secret)
+    .update(`local-upload-v1\n${objectId}\n${expires}\n${contentType}\n${size}`)
+    .digest('hex');
+}
+
+function verifyLocalUpload(
+  objectId: string,
+  expires: number,
+  contentType: string,
+  size: number,
+  signature: string,
+): boolean {
+  const expected = signLocalUpload(objectId, expires, contentType, size);
+  const expectedBytes = Buffer.from(expected, 'hex');
+  const receivedBytes = Buffer.from(signature, 'hex');
+  return expectedBytes.length === receivedBytes.length &&
+    timingSafeEqual(expectedBytes, receivedBytes);
 }
 
 function parseObjectPath(path: string): {

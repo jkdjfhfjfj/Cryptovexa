@@ -134,9 +134,35 @@ workspace.post("/v1/uploads",async(req,res):Promise<void>=>{
   const b=RequestUploadBody.parse(req.body);
   assert(b.size>0&&b.size<=10485760,"Files must be smaller than 10 MB");
   assert(["image/jpeg","image/png","image/webp","application/pdf"].includes(b.contentType),"Upload a PNG, JPEG, WebP or PDF");
-  const uploadURL=await storage.getObjectEntityUploadURL(),objectPath=storage.normalizeObjectEntityPath(uploadURL),id=uid();
+  const uploadURL=await storage.getObjectEntityUploadURL({
+    origin:`${req.protocol}://${req.get("host")}`,
+    contentType:b.contentType,
+    size:b.size,
+  }),objectPath=storage.normalizeObjectEntityPath(uploadURL),id=uid();
   await q("INSERT INTO private_files(id,user_id,object_path,name,content_type,size) VALUES($1,$2,$3,$4,$5,$6)",[id,u.id,objectPath,b.name,b.contentType,b.size]);
   res.json({uploadURL,objectPath,id,url:`/api/v1/files/${id}`});
+});
+workspace.put("/v1/uploads/local/:id",async(req,res):Promise<void>=>{
+  assert(storage.isLocalStorageEnabled(),"Local document storage is not configured",503);
+  const id=Array.isArray(req.params.id)?req.params.id[0]:req.params.id;
+  const expires=typeof req.query.expires==="string"?req.query.expires:"";
+  const contentType=typeof req.query.contentType==="string"?req.query.contentType:"";
+  const sizeValue=typeof req.query.size==="string"?req.query.size:"";
+  const signature=typeof req.query.signature==="string"?req.query.signature:"";
+  const size=/^\d+$/.test(sizeValue)?Number(sizeValue):NaN;
+  const result=await storage.storeLocalUpload({
+    objectId:id,expires,contentType,size,signature,
+    requestContentType:req.get("content-type"),stream:req,
+  });
+  if(result!=="stored"){
+    const status=result==="unavailable"?503:result==="exists"?409:
+      result==="forbidden"||result==="expired"?403:400;
+    assert(false,result==="exists"?"This upload link has already been used":
+      result==="unavailable"?"Local document storage is not configured":
+      "This upload link is invalid, expired, or does not match the file",status);
+    return;
+  }
+  res.status(200).json({ok:true});
 });
 workspace.get("/v1/files/{*path}",async(req,res):Promise<void>=>{
   const p=req.params.path;const raw=Array.isArray(p)?p.join("/"):String(p);
@@ -202,7 +228,7 @@ workspace.get("/v1/manifest.webmanifest",async(_req,res):Promise<void>=>{
 workspace.get("/admin/backup",async(req,res):Promise<void>=>{
   const u=await requireUser(req,"admin");
   assert(u.role==="superadmin","Only superadmins may export platform data",403);
-  const output:Record<string,any>={exported_at:new Date().toISOString(),format:"vexa-data-export",note:"Credentials and password hashes are intentionally excluded. Private file bytes remain in App Storage."};
+  const output:Record<string,any>={exported_at:new Date().toISOString(),format:"vexa-data-export",note:"Credentials and password hashes are intentionally excluded. Private file bytes are not included; back up the configured file storage separately."};
   for(const table of ["users","wallets","ledger","assets","rentals","deposits","withdrawals","platform_records","audit_logs"]){
     const rows=await q(`SELECT * FROM ${table}`);
     output[table]=rows.map(({password_hash,twofa_secret,...r})=>{
