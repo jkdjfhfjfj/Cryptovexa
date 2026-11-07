@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "MyCryptoVexa"
+description = "Crypto-funded property and machine rentals with user wallets, manual deposit review, rental billing, support and a role-based admin console."
+version = "1.0.0"
+id = "artifacts/mycryptovexa"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24833
+
+[services.development]
+run = "pnpm --filter @workspace/mycryptovexa run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/mycryptovexa", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/mycryptovexa/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24833"
+BASE_PATH = "/"

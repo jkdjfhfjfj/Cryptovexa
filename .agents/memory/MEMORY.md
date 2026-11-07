@@ -1,0 +1,2 @@
+- [Authentication decision](authentication-decision.md) — the supplied product spec explicitly requests password auth and separate admin sessions.
+- [Verification boundaries](verification-boundaries.md) — domain money tests do not verify authenticated workspace SQL or serialized dates.

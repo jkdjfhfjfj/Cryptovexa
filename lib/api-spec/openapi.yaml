@@ -11,6 +11,111 @@ tags:
   - name: health
     description: Health operations
 paths:
+  /v1/bootstrap:
+    get:
+      operationId: getBootstrap
+      responses:
+        "200":
+          description: Public brand, marketplace, help and session state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformState" }
+  /v1/auth/{action}:
+    post:
+      operationId: accountAction
+      parameters:
+        - { name: action, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ActionInput" }
+      responses:
+        "200":
+          description: Account action result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionResult" }
+  /v1/workspace:
+    get:
+      operationId: getWorkspace
+      responses:
+        "200":
+          description: User wallets, rentals, transactions, tickets, KYC and notifications
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformState" }
+  /v1/actions/{action}:
+    post:
+      operationId: userAction
+      parameters:
+        - { name: action, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ActionInput" }
+      responses:
+        "200":
+          description: Persisted user action result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionResult" }
+  /admin/auth/{action}:
+    post:
+      operationId: adminAccountAction
+      parameters:
+        - { name: action, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ActionInput" }
+      responses:
+        "200":
+          description: Admin session result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionResult" }
+  /admin/workspace:
+    get:
+      operationId: getAdminWorkspace
+      responses:
+        "200":
+          description: Role-filtered administration workspace
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlatformState" }
+  /admin/actions/{action}:
+    post:
+      operationId: adminAction
+      parameters:
+        - { name: action, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ActionInput" }
+      responses:
+        "200":
+          description: Audited administration result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionResult" }
+  /v1/uploads:
+    post:
+      operationId: requestUpload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UploadInput" }
+      responses:
+        "200":
+          description: Private upload URL
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UploadResult" }
   /healthz:
     get:
       operationId: healthCheck
@@ -26,6 +131,56 @@ paths:
                 $ref: "#/components/schemas/HealthStatus"
 components:
   schemas:
+    PlatformState:
+      type: object
+      additionalProperties: true
+      properties:
+        settings: { type: object, additionalProperties: true }
+        user: { type: ["object", "null"], additionalProperties: true }
+        assets: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        currencies: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        wallets: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        rentals: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        deposits: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        withdrawals: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        ledger: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        tickets: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        articles: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        notifications: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        announcements: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        users: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        kycRequests: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        auditLogs: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        emailLogs: { type: array, items: { $ref: "#/components/schemas/Record" } }
+    Record:
+      type: object
+      additionalProperties: true
+    ActionInput:
+      type: object
+      additionalProperties: true
+      properties:
+        id: { type: string }
+    ActionResult:
+      type: object
+      required: [success, message]
+      additionalProperties: true
+      properties:
+        success: { type: boolean }
+        message: { type: string }
+        user: { type: ["object", "null"], additionalProperties: true }
+    UploadInput:
+      type: object
+      required: [name, contentType, size]
+      properties:
+        name: { type: string }
+        contentType: { type: string }
+        size: { type: integer, maximum: 10485760 }
+    UploadResult:
+      type: object
+      required: [uploadURL, objectPath]
+      properties:
+        uploadURL: { type: string }
+        objectPath: { type: string }
     HealthStatus:
       type: object
       properties:
