@@ -3,4 +3,4 @@
 - [Product scope](product-scope.md) — the user confirmed virtual in-app rentals and an intended audience of all countries.
 - [Pooled Binance deposits](binance-pooled-deposits.md) — the operator chose shared addresses with automatic credits and accepts the attribution risk.
 - [Admin editor stability](admin-editor-stability.md) — admin data must not auto-refresh while editing or overwrite unsaved drafts.
-- [VPS deployment plan](vps-deployment.md) — persistent local PostgreSQL on EC2; test on temporary HTTPS first and connect the real domain last.
+- [VPS deployment plan](vps-deployment.md) — PostgreSQL and private uploads on EC2; connect mycryptovexa.com only after a stable IP is set.
