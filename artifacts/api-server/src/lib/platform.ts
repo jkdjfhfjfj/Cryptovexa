@@ -188,6 +188,10 @@ export const defaultSettings: Record<string, any> = {
 };
 export function defaultEmailTemplateBody(key:string){
   const securityTemplates=new Set(["verify_email","password_reset","password_changed","new_login","twofa_changed","twofa_reset","withdrawal_confirmation"]);
+  if(key==="admin_security_alert"){
+    return `<p>A security event was recorded for the administrator sign-in page.</p><h1>{{title}}</h1><table role="presentation" cellpadding="6" cellspacing="0" border="0"><tr><td><strong>Event</strong></td><td>{{event_label}}</td></tr><tr><td><strong>Account</strong></td><td>{{email}}</td></tr><tr><td><strong>IP address</strong></td><td>{{ip}}</td></tr><tr><td><strong>Location</strong></td><td>{{location_summary}}</td></tr><tr><td><strong>Referrer site</strong></td><td>{{referrer_origin}}</td></tr><tr><td><strong>Browser</strong></td><td>{{user_agent}}</td></tr><tr><td><strong>Time (UTC)</strong></td><td>{{recorded_at}}</td></tr></table><p>Precise device coordinates appear only when the person explicitly shares browser location. Browser-reported coordinates are not independently verified.</p>`;
+  }
+  securityTemplates.add("admin_security_alert");
   const securityNote=securityTemplates.has(key)
     ?"<p><strong>Security note:</strong> If you did not request this change, contact support using the address in this email.</p>"
     :"";

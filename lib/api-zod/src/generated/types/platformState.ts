@@ -27,6 +27,7 @@ export interface PlatformState {
   users?: Record[];
   kycRequests?: Record[];
   auditLogs?: Record[];
+  adminAccessEvents?: Record[];
   emailLogs?: Record[];
   [key: string]: unknown;
  }

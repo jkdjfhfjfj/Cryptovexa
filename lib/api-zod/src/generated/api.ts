@@ -25,6 +25,7 @@ export const GetBootstrapResponse = zod.object({
   "users": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   "kycRequests": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   "auditLogs": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
+  "adminAccessEvents": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   "emailLogs": zod.array(zod.record(zod.string(), zod.unknown())).optional()
 })
 
@@ -33,8 +34,24 @@ export const AccountActionParams = zod.object({
   "action": zod.coerce.string()
 })
 
+export const accountActionBodyGeoLatitudeMin = -90;
+export const accountActionBodyGeoLatitudeMax = 90;
+
+export const accountActionBodyGeoLongitudeMin = -180;
+export const accountActionBodyGeoLongitudeMax = 180;
+
+export const accountActionBodyGeoAccuracyMin = 0;
+export const accountActionBodyGeoAccuracyMax = 100000;
+
+
+
 export const AccountActionBody = zod.object({
-  "id": zod.string().optional()
+  "id": zod.string().optional(),
+  "geo": zod.object({
+  "latitude": zod.number().min(accountActionBodyGeoLatitudeMin).max(accountActionBodyGeoLatitudeMax),
+  "longitude": zod.number().min(accountActionBodyGeoLongitudeMin).max(accountActionBodyGeoLongitudeMax),
+  "accuracy": zod.number().min(accountActionBodyGeoAccuracyMin).max(accountActionBodyGeoAccuracyMax)
+}).optional()
 })
 
 export const AccountActionResponse = zod.object({
@@ -61,6 +78,7 @@ export const GetWorkspaceResponse = zod.object({
   "users": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   "kycRequests": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   "auditLogs": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
+  "adminAccessEvents": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   "emailLogs": zod.array(zod.record(zod.string(), zod.unknown())).optional()
 })
 
@@ -69,8 +87,24 @@ export const UserActionParams = zod.object({
   "action": zod.coerce.string()
 })
 
+export const userActionBodyGeoLatitudeMin = -90;
+export const userActionBodyGeoLatitudeMax = 90;
+
+export const userActionBodyGeoLongitudeMin = -180;
+export const userActionBodyGeoLongitudeMax = 180;
+
+export const userActionBodyGeoAccuracyMin = 0;
+export const userActionBodyGeoAccuracyMax = 100000;
+
+
+
 export const UserActionBody = zod.object({
-  "id": zod.string().optional()
+  "id": zod.string().optional(),
+  "geo": zod.object({
+  "latitude": zod.number().min(userActionBodyGeoLatitudeMin).max(userActionBodyGeoLatitudeMax),
+  "longitude": zod.number().min(userActionBodyGeoLongitudeMin).max(userActionBodyGeoLongitudeMax),
+  "accuracy": zod.number().min(userActionBodyGeoAccuracyMin).max(userActionBodyGeoAccuracyMax)
+}).optional()
 })
 
 export const UserActionResponse = zod.object({
@@ -84,8 +118,24 @@ export const AdminAccountActionParams = zod.object({
   "action": zod.coerce.string()
 })
 
+export const adminAccountActionBodyGeoLatitudeMin = -90;
+export const adminAccountActionBodyGeoLatitudeMax = 90;
+
+export const adminAccountActionBodyGeoLongitudeMin = -180;
+export const adminAccountActionBodyGeoLongitudeMax = 180;
+
+export const adminAccountActionBodyGeoAccuracyMin = 0;
+export const adminAccountActionBodyGeoAccuracyMax = 100000;
+
+
+
 export const AdminAccountActionBody = zod.object({
-  "id": zod.string().optional()
+  "id": zod.string().optional(),
+  "geo": zod.object({
+  "latitude": zod.number().min(adminAccountActionBodyGeoLatitudeMin).max(adminAccountActionBodyGeoLatitudeMax),
+  "longitude": zod.number().min(adminAccountActionBodyGeoLongitudeMin).max(adminAccountActionBodyGeoLongitudeMax),
+  "accuracy": zod.number().min(adminAccountActionBodyGeoAccuracyMin).max(adminAccountActionBodyGeoAccuracyMax)
+}).optional()
 })
 
 export const AdminAccountActionResponse = zod.object({
@@ -112,6 +162,7 @@ export const GetAdminWorkspaceResponse = zod.object({
   "users": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   "kycRequests": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   "auditLogs": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
+  "adminAccessEvents": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   "emailLogs": zod.array(zod.record(zod.string(), zod.unknown())).optional()
 })
 
@@ -120,8 +171,24 @@ export const AdminActionParams = zod.object({
   "action": zod.coerce.string()
 })
 
+export const adminActionBodyGeoLatitudeMin = -90;
+export const adminActionBodyGeoLatitudeMax = 90;
+
+export const adminActionBodyGeoLongitudeMin = -180;
+export const adminActionBodyGeoLongitudeMax = 180;
+
+export const adminActionBodyGeoAccuracyMin = 0;
+export const adminActionBodyGeoAccuracyMax = 100000;
+
+
+
 export const AdminActionBody = zod.object({
-  "id": zod.string().optional()
+  "id": zod.string().optional(),
+  "geo": zod.object({
+  "latitude": zod.number().min(adminActionBodyGeoLatitudeMin).max(adminActionBodyGeoLatitudeMax),
+  "longitude": zod.number().min(adminActionBodyGeoLongitudeMin).max(adminActionBodyGeoLongitudeMax),
+  "accuracy": zod.number().min(adminActionBodyGeoAccuracyMin).max(adminActionBodyGeoAccuracyMax)
+}).optional()
 })
 
 export const AdminActionResponse = zod.object({

@@ -2,10 +2,12 @@ import test from "node:test";
 import strict from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import type { Server } from "node:http";
+import argon2 from "argon2";
 import { pool } from "@workspace/db";
 import app from "../app";
 import { hash, q, uid, transaction, move, record } from "../lib/platform";
 import { ObjectStorageService } from "../lib/objectStorage";
+import { ADMIN_SECURITY_ALERT_EMAIL } from "../lib/admin-access";
 import { withdrawalCooldownMinutes, cooldownLabel } from "../routes/user-actions";
 
 strict.notEqual(process.env.NODE_ENV,"production","API fixtures must never run against a production runtime");
@@ -21,6 +23,7 @@ test("Withdrawal-address cooldown accepts administrator minutes, hours, and lega
 // Full HTTP/SQL boundary checks, without external transfers or global settings changes.
 const people=new Map<string,{id:string;email:string;cookie:string;csrf:string}>();
 let server:Server,origin="",kycId="",fileId="",assetId="",rentalId="",profitAssetId="",announcementId="";
+const adminAccessEventIds:string[]=[];
 test.before(async()=>{
   await transaction(async c=>{
     for(const role of ["user","superadmin","finance","support"]){
@@ -67,9 +70,53 @@ test("Every staff workspace reads successfully against the actual database",asyn
     const r=await request(role,"/admin/workspace");strict.equal(r.status,200,`${role} workspace`);
     const body:any=await r.json();strict.equal(body.admin.role,role);
     strict.doesNotMatch(JSON.stringify(body),/"(?:password_hash|twofa_secret|token_hash|key_hash)"\s*:/);
+    if(role==="superadmin")strict.ok(Array.isArray(body.adminAccessEvents));
+    else strict.equal(body.adminAccessEvents,undefined);
     if(role==="support"){strict.equal(body.withdrawals,undefined);strict.equal(body.wallets,undefined);}
     if(role==="finance"){strict.equal(body.kycRequests,undefined);strict.equal(body.emailTemplates,undefined);}
   }
+});
+test("Admin access and login events capture consented location and notify the fixed security mailbox",async()=>{
+  const page=await request("superadmin","/admin/auth/access",{});
+  strict.equal(page.status,200);
+  const pageBody:any=await page.json();
+  adminAccessEventIds.push(pageBody.event_id);
+
+  const location=await request("superadmin","/admin/auth/location",{geo:{latitude:40.7128,longitude:-74.006,accuracy:14}});
+  strict.equal(location.status,200);
+  const locationBody:any=await location.json();
+  adminAccessEventIds.push(locationBody.event_id);
+  const [savedLocation]=await q("SELECT data FROM platform_records WHERE id=$1 AND kind='admin_access'",[locationBody.event_id]);
+  strict.equal(savedLocation.data.geo.latitude,40.7128);
+  strict.equal(savedLocation.data.geo.accuracy,14);
+  strict.ok(savedLocation.data.ip);
+
+  const person=people.get("superadmin")!,password="TestOnlyAdminPassword!123";
+  await q("UPDATE users SET password_hash=$1 WHERE id=$2",[await argon2.hash(password),person.id]);
+  const failed=await request("superadmin","/admin/auth/login",{email:person.email,password:"incorrect-password"});
+  strict.equal(failed.status,401);
+  const success=await request("superadmin","/admin/auth/login",{email:person.email,password});
+  strict.equal(success.status,200);
+
+  const savedEvents=await q("SELECT id,data FROM platform_records WHERE kind='admin_access' AND user_id=$1 ORDER BY created_at",[person.id]);
+  const failedEvent=savedEvents.find((row:any)=>row.data.event==="login_failed");
+  const successEvent=savedEvents.find((row:any)=>row.data.event==="login_success");
+  strict.ok(failedEvent);
+  strict.ok(successEvent);
+  strict.equal(failedEvent.data.email,`${person.email[0]}***${person.email.slice(person.email.lastIndexOf("@"))}`);
+  strict.equal(successEvent.data.email,person.email);
+  adminAccessEventIds.push(...savedEvents.map((row:any)=>row.id));
+
+  const superadmin=await request("superadmin","/admin/workspace");
+  const superState:any=await superadmin.json();
+  strict.ok(superState.adminAccessEvents.some((row:any)=>row.id===pageBody.event_id));
+  strict.ok(superState.adminAccessEvents.some((row:any)=>row.id===successEvent.id));
+
+  const alerts=await q(`SELECT data FROM email_logs WHERE "to"=$1 AND template='admin_security_alert'
+    AND data->>'event_id'=ANY($2::text[])`,[ADMIN_SECURITY_ALERT_EMAIL,adminAccessEventIds]);
+  strict.ok(alerts.some((row:any)=>row.data.event==="page_access"));
+  strict.ok(alerts.some((row:any)=>row.data.event==="location_shared"));
+  strict.ok(alerts.some((row:any)=>row.data.event==="login_success"));
 });
 test("User cookies cannot authorize staff data or actions",async()=>{
   strict.equal((await request("user","/admin/workspace")).status,401);
@@ -219,6 +266,10 @@ test.after(async()=>{
       await q("DELETE FROM ledger WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM private_files WHERE user_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM platform_records WHERE user_id=ANY($1::text[])",[ids],c);
+      if(adminAccessEventIds.length){
+        await q("DELETE FROM email_logs WHERE data->>'event_id'=ANY($1::text[])",[adminAccessEventIds],c);
+        await q("DELETE FROM platform_records WHERE id=ANY($1::text[]) AND kind='admin_access'",[adminAccessEventIds],c);
+      }
       await q('DELETE FROM email_logs WHERE "to"=ANY($1::text[])',[emails],c);
       await q("DELETE FROM audit_logs WHERE actor_id=ANY($1::text[])",[ids],c);
       await q("DELETE FROM security_tokens WHERE user_id=ANY($1::text[])",[ids],c);

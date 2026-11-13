@@ -32,12 +32,32 @@ export interface PlatformState {
   users?: Record[];
   kycRequests?: Record[];
   auditLogs?: Record[];
+  adminAccessEvents?: Record[];
   emailLogs?: Record[];
   [key: string]: unknown;
  }
 
+export type ActionInputGeo = {
+  /**
+     * @minimum -90
+     * @maximum 90
+     */
+  latitude: number;
+  /**
+     * @minimum -180
+     * @maximum 180
+     */
+  longitude: number;
+  /**
+     * @minimum 0
+     * @maximum 100000
+     */
+  accuracy: number;
+};
+
 export interface ActionInput {
   id?: string;
+  geo?: ActionInputGeo;
   [key: string]: unknown;
  }
 

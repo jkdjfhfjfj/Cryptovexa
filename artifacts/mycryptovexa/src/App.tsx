@@ -31,6 +31,7 @@ import { AdminSupport, AdminHelp } from '@/pages/admin/support';
 import { AdminContent, AdminEmails, AdminLogs, AdminReports } from '@/pages/admin/content';
 import AdminSettings from '@/pages/admin/settings';
 import AdminSecurity from '@/pages/admin/security';
+import AdminAccessHistory from '@/pages/admin/access';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, refetchOnReconnect: false, refetchOnMount: false, refetchInterval: false } } });
 
@@ -131,6 +132,7 @@ function Router() {
         <Route path="/admin/logs" component={a(AdminLogs)} />
         <Route path="/admin/reports" component={a(AdminReports)} />
         <Route path="/admin/security" component={a(AdminSecurity)} />
+        <Route path="/admin/access" component={a(AdminAccessHistory)} />
         <Route component={NotFound} />
       </Switch>
     </RoutedErrorBoundary>

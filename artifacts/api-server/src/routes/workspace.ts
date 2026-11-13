@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { randomBytes } from "node:crypto";
 import PDFDocument from "pdfkit";
 import { RequestUploadBody } from "@workspace/api-zod";
-import { q, uid, config, safeUser, session, requireUser, getRecords, assert, audit } from "../lib/platform";
+import { q, uid, config, safeUser, session, requireUser, getRecords, assert, audit, unpack } from "../lib/platform";
 import { ObjectStorageService } from "../lib/objectStorage";
 import { marketRates } from "../lib/services";
 
@@ -120,6 +120,7 @@ workspace.get("/admin/workspace",async(req,res):Promise<void>=>{
   if(u.role==="superadmin")Object.assign(result,{
     emailLogs:(await q('SELECT id,"to",template,status,attempts,error,created_at FROM email_logs ORDER BY created_at DESC LIMIT 500')),
     auditLogs:await q("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 1000"),
+    adminAccessEvents:(await q("SELECT * FROM platform_records WHERE kind='admin_access' ORDER BY created_at DESC LIMIT 1000")).map(unpack),
     emailTemplates:await getRecords("email_template"),referrals:await getRecords("referral"),commissions:await getRecords("commission"),
     sessions:await q("SELECT id,user_id,scope,ip,device,created_at,revoked FROM login_sessions ORDER BY created_at DESC LIMIT 500"),
     loginLogs:await q("SELECT id,user_id,scope,ip,device,created_at,revoked FROM login_sessions ORDER BY created_at DESC LIMIT 500"),

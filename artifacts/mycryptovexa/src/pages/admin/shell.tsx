@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { Link, useLocation } from 'wouter';
 import { useGetAdminWorkspace, getGetAdminWorkspaceQueryKey, getGetBootstrapQueryKey, adminAccountAction } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
-import { LayoutDashboard, Users, Building2, Timer, ArrowDownToLine, ArrowUpFromLine, ShieldCheck, GitBranch, Headset, BookOpen, FileText, Mail, Settings, ScrollText, BarChart3, ChevronsLeft, LogOut, Fingerprint, Moon, Sun, Menu, Search, Download, RefreshCw } from 'lucide-react';
+import { LayoutDashboard, Users, Building2, Timer, ArrowDownToLine, ArrowUpFromLine, ShieldCheck, GitBranch, Headset, BookOpen, FileText, Mail, Settings, ScrollText, BarChart3, ChevronsLeft, LogOut, Fingerprint, Moon, Sun, Menu, Search, Download, RefreshCw, MapPin } from 'lucide-react';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Input } from '@/components/ui/input';
 import { usePlatform, list } from '@/lib/platform';
@@ -30,6 +30,7 @@ export const MODULES = [
   { key: 'logs', label: 'Logs', icon: ScrollText, roles: ['superadmin', 'finance'] },
   { key: 'reports', label: 'Reports', icon: BarChart3, roles: ['superadmin', 'finance'] },
   { key: 'security', label: 'My security', icon: Fingerprint, roles: ['superadmin', 'finance', 'support'] },
+  { key: 'access', label: 'Access history', icon: MapPin, roles: ['superadmin'] },
 ] as const;
 
 type AdminCtx = { state: R; admin: R; role: string; can: (k: string) => boolean };

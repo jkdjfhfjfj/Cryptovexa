@@ -427,6 +427,23 @@ test("Branded email templates use absolute hosted assets, safe content, links, a
   strict.ok(rendered.text.includes("Need help?")&&rendered.text.includes("help@example.invalid"));
   strict.equal(rendered.replyTo,"help@example.invalid");
 });
+test("Admin security alerts include access details and escape browser-controlled values",()=>{
+  const rendered=renderEmailMessage("admin_security_alert",null,{
+    title:"Admin security alert",
+    event_label:"Admin sign-in failed",
+    email:"a***@example.invalid",
+    ip:"203.0.113.10",
+    location_summary:"<script>alert(1)</script>",
+    referrer_origin:"https://portal.example.invalid",
+    user_agent:"Browser & device",
+    recorded_at:"2026-11-13T10:00:00.000Z",
+  },{site_name:"Vexa",smtp:{from_email:"mail@example.invalid"}});
+  strict.match(rendered.html,/203\.0\.113\.10/);
+  strict.match(rendered.html,/https:\/\/portal\.example\.invalid/);
+  strict.match(rendered.html,/&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  strict.doesNotMatch(rendered.html,/<script>/);
+  strict.match(rendered.text,/Browser & device/);
+});
 test("Email templates fall back to the actual request host or an embedded wordmark",()=>{
   const hosted=renderEmailMessage("welcome",null,{title:"Welcome",body:"Your account is ready.",origin:"https://new-host.example.invalid"},{site_name:"Vexa",smtp:{from_email:"mail@example.invalid"}});
   strict.match(hosted.html,/src="https:\/\/new-host\.example\.invalid\/icon-192\.png"/);

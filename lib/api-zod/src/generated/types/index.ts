@@ -7,6 +7,7 @@
  */
 
 export * from './actionInput';
+export * from './actionInputGeo';
 export * from './actionResult';
 export * from './actionResultUser';
 export * from './healthStatus';

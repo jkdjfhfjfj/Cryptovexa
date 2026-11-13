@@ -151,6 +151,7 @@ components:
         users: { type: array, items: { $ref: "#/components/schemas/Record" } }
         kycRequests: { type: array, items: { $ref: "#/components/schemas/Record" } }
         auditLogs: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        adminAccessEvents: { type: array, items: { $ref: "#/components/schemas/Record" } }
         emailLogs: { type: array, items: { $ref: "#/components/schemas/Record" } }
     Record:
       type: object
@@ -160,6 +161,14 @@ components:
       additionalProperties: true
       properties:
         id: { type: string }
+        geo:
+          type: object
+          required: [latitude, longitude, accuracy]
+          additionalProperties: false
+          properties:
+            latitude: { type: number, minimum: -90, maximum: 90 }
+            longitude: { type: number, minimum: -180, maximum: 180 }
+            accuracy: { type: number, minimum: 0, maximum: 100000 }
     ActionResult:
       type: object
       required: [success, message]

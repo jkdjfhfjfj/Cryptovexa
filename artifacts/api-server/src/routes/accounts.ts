@@ -7,6 +7,7 @@ import { isIP } from "node:net";
 import { verifyCaptcha } from "../lib/captcha";
 import { AccountActionBody, AdminAccountActionBody } from "@workspace/api-zod";
 import { q, uid, hash, config, safeUser, requireUser, newSession, session, record, token, event, assert, str, encrypt, decrypt, audit, transaction, accountLinkOrigin, accountAllowedInEnvironment } from "../lib/platform";
+import { normalizeAdminGeo, recordAdminAccess, type AdminAccessEvent } from "../lib/admin-access";
 
 export const accounts: IRouter = Router();
 export const totp = (u: any, brand: string) => new TOTP({issuer:brand,label:u.email,algorithm:"SHA1",digits:6,period:30,secret:Secret.fromBase32(decrypt(u.twofa_secret))});
@@ -27,10 +28,37 @@ export async function checkTwofa(u: any, code: unknown, brand: string, conn?:any
   assert(recovery, "Invalid or expired authenticator code");
 }
 
+async function safeAdminAccessRecord(
+  req: Parameters<typeof recordAdminAccess>[0],
+  event: AdminAccessEvent,
+  email: string | null,
+  geo?: unknown,
+  userId: string | null = null,
+): Promise<void> {
+  try {
+    await recordAdminAccess(req, event, email, geo, userId);
+  } catch {
+    req.log?.error({ event }, "Could not record administrator access event");
+  }
+}
+
 accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promise<void> => {
   const isAdmin = req.path.startsWith("/admin"), scope = isAdmin ? "admin" : "user";
   const b = (isAdmin ? AdminAccountActionBody : AccountActionBody).passthrough().parse(req.body) as Record<string, any>;
-  const action = String(req.params.action), cfg = await config(true);
+  const action = String(req.params.action);
+  if (isAdmin && action === "access") {
+    const eventId = await recordAdminAccess(req, "page_access");
+    res.json({ success: true, message: "Access event recorded", event_id: eventId });
+    return;
+  }
+  if (isAdmin && action === "location") {
+    const geo = normalizeAdminGeo(b.geo);
+    assert(geo, "A valid browser location is required");
+    const eventId = await recordAdminAccess(req, "location_shared", null, geo);
+    res.json({ success: true, message: "Location event recorded", event_id: eventId });
+    return;
+  }
+  const cfg = await config(true);
   const linkOrigin=["register","forgot-password","resend-verification"].includes(action)?accountLinkOrigin(req):undefined;
   let result: any = {success:true,message:"Saved"};
   if (action === "register" || (isAdmin && action === "setup")) {
@@ -76,17 +104,27 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
       return u;
     });
     await newSession(req,res,user.id,scope);
+    if (isAdmin && action === "setup") await safeAdminAccessRecord(req, "admin_setup", user.email, b.geo, user.id);
     if(action!=="setup") {
       const code=await token(user.id,"verify");
       await event(user.id,"Verify your email","Confirm your email address to secure your account.","verify_email",undefined,{token:code,path:"/verify-email",origin:linkOrigin});
     }
     result={success:true,message:action==="setup"?"Administrator created":"Account created. Verification email has been queued.",user:safeUser(user)};
   } else if(action==="login") {
-    const email=z.string().email().parse(b.email).toLowerCase();
+    let email:string;
+    try {
+      email=z.string().email().parse(b.email).toLowerCase();
+    } catch (error) {
+      if(isAdmin) await safeAdminAccessRecord(req,"login_failed",typeof b.email==="string"?b.email:null,b.geo);
+      throw error;
+    }
     const [u]=await q("SELECT * FROM users WHERE email=$1",[email]);
     if(!isAdmin)await verifyCaptcha(req,cfg,u?.id,Boolean(b.code));
     const lockedUntil=u?.data?.login_locked_until;
-    assert(!lockedUntil||new Date(lockedUntil).getTime()<=Date.now(),"This account is temporarily locked after repeated failed sign-ins. Try again in 15 minutes.",429);
+    if(lockedUntil&&new Date(lockedUntil).getTime()>Date.now()){
+      if(isAdmin)await safeAdminAccessRecord(req,"login_failed",email,b.geo,u?.role&&u.role!=="user"?u.id:null);
+      assert(false,"This account is temporarily locked after repeated failed sign-ins. Try again in 15 minutes.",429);
+    }
     // A fixed dummy hash calculation makes missing-account and wrong-password paths comparable.
     const correct=u ? await argon2.verify(u.password_hash,String(b.password??"")) : (await argon2.hash(String(b.password??"")),false);
     if(!(u&&correct&&accountAllowedInEnvironment(u)&&u.status==="active"&&(!isAdmin||u.role!=="user"))){
@@ -94,9 +132,11 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
         const failures=Number(u.data.login_failures??0)+1,limit=Math.max(3,Math.min(20,Number(cfg.login_lockout_attempts??5)));
         await q("UPDATE users SET data=data||$1::jsonb WHERE id=$2",[JSON.stringify({login_failures:failures,login_locked_until:failures>=limit?new Date(Date.now()+15*60000).toISOString():null}),u.id]);
       }
+      if(isAdmin)await safeAdminAccessRecord(req,"login_failed",email,b.geo,u?.role&&u.role!=="user"?u.id:null);
       assert(false,"Invalid email or password",401);
     }
     if(u.twofa_enabled&&!b.code){
+      if(isAdmin)await safeAdminAccessRecord(req,"twofa_challenge",u.email,b.geo,u.id);
       res.json({success:true,requires2fa:true,message:"Enter your authenticator code"});return;
     }
     if(u.twofa_enabled) {
@@ -104,6 +144,7 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
       catch(e){
         await q(`UPDATE users SET data=data||jsonb_build_object('login_failures',COALESCE((data->>'login_failures')::integer,0)+1,
           'login_locked_until',CASE WHEN COALESCE((data->>'login_failures')::integer,0)+1>=$2 THEN to_jsonb(now()+interval '15 minutes') ELSE 'null'::jsonb END) WHERE id=$1`,[u.id,Math.max(3,Math.min(20,Number(cfg.login_lockout_attempts??5)))]);
+        if(isAdmin)await safeAdminAccessRecord(req,"twofa_failed",u.email,b.geo,u.id);
         throw e;
       }
     }
@@ -111,6 +152,7 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
     await q("UPDATE users SET data=data||'{\"login_failures\":0,\"login_locked_until\":null}'::jsonb WHERE id=$1",[u.id]);
     await newSession(req,res,u.id,scope);
     if(isAdmin)await audit(u,"admin_login",u.id,req);
+    if(isAdmin)await safeAdminAccessRecord(req,"login_success",u.email,b.geo,u.id);
     await event(u.id,"New sign-in","A device signed in to your account. Review active sessions if this was not you.","new_login");
     result={success:true,message:"Welcome back",user:safeUser(u)};
   } else if(action==="forgot-password") {

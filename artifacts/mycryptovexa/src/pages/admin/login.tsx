@@ -3,7 +3,11 @@ import { Link, useLocation } from 'wouter';
 import { Mail, Lock, KeyRound, AtSign, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { usePlatform, useRun } from '@/lib/platform';
+import { adminAccountAction } from '@workspace/api-client-react';
+import { csrfOpts } from '@/lib/api';
 import { AuthLayout, Field } from '../auth';
+
+type GeoPayload = { latitude: number; longitude: number; accuracy: number };
 
 export default function AdminLoginPage() {
   const [, navigate] = useLocation();
@@ -12,15 +16,63 @@ export default function AdminLoginPage() {
   const [f, setF] = useState({ email: '', password: '', code: '', username: '' });
   const [need2fa, setNeed2fa] = useState(false);
   const [setup, setSetup] = useState(false);
+  const [geo, setGeo] = useState<GeoPayload | null>(null);
+  const [geoBusy, setGeoBusy] = useState(false);
+  const [geoMessage, setGeoMessage] = useState('');
   const setupAvailable = !!state.adminSetupAvailable;
   const adminId=(state.adminUser as {id?:string}|undefined)?.id??(state.admin as {id?:string}|undefined)?.id;
   useEffect(()=>{if(adminId)navigate('/admin/dashboard');},[adminId,navigate]);
+  useEffect(()=>{void adminAccountAction('access', {}, csrfOpts()).catch(()=>undefined);},[]);
+
+  const requestLocation = () => {
+    if (!navigator.geolocation || !window.isSecureContext) {
+      setGeoMessage('Precise location is unavailable here. Sign-in will still work.');
+      return;
+    }
+    setGeoBusy(true);
+    setGeoMessage('');
+    navigator.geolocation.getCurrentPosition(async ({ coords }) => {
+      const location = { latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy };
+      setGeo(location);
+      try {
+        await adminAccountAction('location', { geo: location }, csrfOpts());
+        setGeoMessage('Location shared with the security report. It may be approximate.');
+      } catch {
+        setGeoMessage('Location was allowed but could not be recorded. Sign-in will still work.');
+      } finally {
+        setGeoBusy(false);
+      }
+    }, (error) => {
+      setGeoMessage(error.code === 1
+        ? 'Location permission was denied. Sign-in will still work; the IP address is still recorded.'
+        : 'Location is unavailable. Sign-in will still work; the IP address is still recorded.');
+      setGeoBusy(false);
+    }, { enableHighAccuracy: false, maximumAge: 30000, timeout: 10000 });
+  };
+
+  const securityNotice = (
+    <section className="rounded-2xl border bg-muted/40 p-4 space-y-3" data-testid="admin-location-notice">
+      <div>
+        <p className="text-sm font-semibold">Admin sign-in security notice</p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Page visits and sign-in attempts record the IP address, time, browser, and referring site. In production, security alerts go to the administrator security mailbox. Precise device location is optional and is only sent if you request it below.
+        </p>
+      </div>
+      <Button type="button" variant="outline" className="rounded-full" onClick={requestLocation} disabled={geoBusy} data-testid="button-share-admin-location">
+        {geoBusy ? 'Requesting location…' : geo ? 'Update shared location' : 'Share device location'}
+      </Button>
+      {geoMessage && <p role="status" className="text-xs text-muted-foreground" data-testid="text-admin-location-status">{geoMessage}</p>}
+      {geo && <p className="text-[11px] text-muted-foreground" data-testid="text-admin-location-coordinates">Browser-reported coordinates: {geo.latitude.toFixed(5)}, {geo.longitude.toFixed(5)} (±{Math.round(geo.accuracy)} m)</p>}
+      <p className="text-[11px] text-muted-foreground">Denying location does not block sign-in. Rapid repeated page-access or failed-login alerts may be grouped for five minutes.</p>
+    </section>
+  );
 
   if (setup && setupAvailable) {
     const ok = f.email && f.username && f.password.length >= 12;
     return (
       <AuthLayout title="Create the first administrator" sub="Development-only setup. Available because no admin accounts exist yet.">
         <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs flex gap-2 mb-4"><ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />This account becomes superadmin. Choose a unique password of at least 12 characters; there are no default credentials.</div>
+        {securityNotice}
         <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); run('setup', { email: f.email, password: f.password, username: f.username }, { success: 'Administrator created', onSuccess: () => navigate('/admin/dashboard') }); }}>
           <Field icon={Mail} label="Email" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} data-testid="input-setup-email" />
           <Field icon={AtSign} label="Username" value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} data-testid="input-setup-username" />
@@ -36,11 +88,12 @@ export default function AdminLoginPage() {
     <AuthLayout title={`${brand.short} Console`} sub="Staff sign in. Sessions are separate from user accounts." footer={<div className="flex flex-wrap gap-x-6 gap-y-2"><Link href="/login" className="inline-flex min-h-11 items-center text-primary font-semibold rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="link-customer-login">Customer sign in</Link><Link href="/" className="inline-flex min-h-11 items-center hover:text-foreground rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="link-admin-home">Back to home</Link></div>}>
       <form className="space-y-4" onSubmit={async (e) => {
         e.preventDefault();
-        const res = await run('login', { email: f.email, password: f.password, code: f.code || undefined }, { success: false });
+        const res = await run('login', { email: f.email, password: f.password, code: f.code || undefined, ...(geo ? { geo } : {}) }, { success: false });
         if (!res) return;
         if (res.requires2fa || res.requiresTwoFactor || res.twofa_required) { setNeed2fa(true); return; }
         navigate('/admin/dashboard');
       }}>
+        {securityNotice}
         <Field icon={Mail} label="Email" type="email" autoComplete="username" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} data-testid="input-admin-email" />
         <Field icon={Lock} label="Password" type="password" autoComplete="current-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} data-testid="input-admin-password" />
         {need2fa && <Field icon={KeyRound} label="Authenticator code" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value.trim() })} data-testid="input-admin-code" />}
