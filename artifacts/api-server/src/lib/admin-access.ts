@@ -33,6 +33,7 @@ const alertEveryTime = new Set<AdminAccessEvent>(["login_success", "admin_setup"
 export function normalizeAdminGeo(value: unknown): AdminGeo | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
+  if (typeof row.latitude !== "number" || typeof row.longitude !== "number" || typeof row.accuracy !== "number") return null;
   const latitude = Number(row.latitude);
   const longitude = Number(row.longitude);
   const accuracy = Number(row.accuracy);

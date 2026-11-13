@@ -4,7 +4,6 @@ import { Mail, Lock, KeyRound, AtSign, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { usePlatform, useRun } from '@/lib/platform';
 import { adminAccountAction } from '@workspace/api-client-react';
-import { csrfOpts } from '@/lib/api';
 import { AuthLayout, Field } from '../auth';
 
 type GeoPayload = { latitude: number; longitude: number; accuracy: number };
@@ -22,7 +21,11 @@ export default function AdminLoginPage() {
   const setupAvailable = !!state.adminSetupAvailable;
   const adminId=(state.adminUser as {id?:string}|undefined)?.id??(state.admin as {id?:string}|undefined)?.id;
   useEffect(()=>{if(adminId)navigate('/admin/dashboard');},[adminId,navigate]);
-  useEffect(()=>{void adminAccountAction('access', {}, csrfOpts()).catch(()=>undefined);},[]);
+  useEffect(()=>{
+    const csrfToken=String(state.csrfToken??'');
+    if(!csrfToken)return;
+    void adminAccountAction('access', {}, {headers:{'x-csrf-token':csrfToken}}).catch(()=>undefined);
+  },[state.csrfToken]);
 
   const requestLocation = () => {
     if (!navigator.geolocation || !window.isSecureContext) {
@@ -35,7 +38,7 @@ export default function AdminLoginPage() {
       const location = { latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy };
       setGeo(location);
       try {
-        await adminAccountAction('location', { geo: location }, csrfOpts());
+        await adminAccountAction('location', { geo: location }, { headers: { 'x-csrf-token': String(state.csrfToken ?? '') } });
         setGeoMessage('Location shared with the security report. It may be approximate.');
       } catch {
         setGeoMessage('Location was allowed but could not be recorded. Sign-in will still work.');

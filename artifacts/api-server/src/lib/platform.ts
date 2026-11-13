@@ -191,7 +191,6 @@ export function defaultEmailTemplateBody(key:string){
   if(key==="admin_security_alert"){
     return `<p>A security event was recorded for the administrator sign-in page.</p><h1>{{title}}</h1><table role="presentation" cellpadding="6" cellspacing="0" border="0"><tr><td><strong>Event</strong></td><td>{{event_label}}</td></tr><tr><td><strong>Account</strong></td><td>{{email}}</td></tr><tr><td><strong>IP address</strong></td><td>{{ip}}</td></tr><tr><td><strong>Location</strong></td><td>{{location_summary}}</td></tr><tr><td><strong>Referrer site</strong></td><td>{{referrer_origin}}</td></tr><tr><td><strong>Browser</strong></td><td>{{user_agent}}</td></tr><tr><td><strong>Time (UTC)</strong></td><td>{{recorded_at}}</td></tr></table><p>Precise device coordinates appear only when the person explicitly shares browser location. Browser-reported coordinates are not independently verified.</p>`;
   }
-  securityTemplates.add("admin_security_alert");
   const securityNote=securityTemplates.has(key)
     ?"<p><strong>Security note:</strong> If you did not request this change, contact support using the address in this email.</p>"
     :"";
@@ -240,13 +239,14 @@ export async function seedPlatform() {
   for (const [slug,title,category,body] of articles) await db.insert(records).values({ id:`article-${slug}`,kind:"article",data:{slug,title,category,body,language:"en",published:true,helpful_yes:0,helpful_no:0} }).onConflictDoNothing();
   const legal: Record<string,string> = {
     terms: "By using {{site_name}}, you agree to the rental terms, payment rules and acceptable-use requirements. Before booking, review the displayed capital requirement, profit schedule and duration. Capital is locked for the term. At maturity, principal is released and profit is credited using the rate snapshot; early stops settle prorated profit. Contact support about disputes. This draft requires jurisdiction-specific legal review before launch.",
-    privacy: "{{site_name}} processes account details, rental history, payment information and requested identity documents to provide and secure the service. Identity documents are restricted to authorized staff. Contact support to request access, correction or deletion where applicable. This draft requires legal review before launch.",
+    privacy: "{{site_name}} processes account details, rental history, payment information, requested identity documents, and administrator-security data (IP address, timestamp, browser/device details, and referring site) to provide and protect the service. Precise device location is collected only after a person explicitly shares it from the administrator sign-in page; it is visible to superadmins and included in security alerts. Browser-reported coordinates are not independently verified, and IP addresses are not sent to a third-party geolocation provider. Contact support to request access, correction, or deletion where applicable. This draft requires legal review before launch.",
     risk: "Cryptocurrency transfers can be irreversible, and funds may be lost by selecting the wrong address or network. Rental principal remains locked for the selected term. Profit follows the rate and duration displayed at booking; early stops settle prorated profit. Withdrawals remain subject to account checks, operator processing and network availability. This draft requires jurisdiction-specific legal review before launch.",
   };
   for (const [key,body] of Object.entries(legal)) await db.insert(records).values({id:`legal-${key}-en`,kind:"legal",data:{key,language:"en",body}}).onConflictDoNothing();
   const oldDefaults:Record<string,string>={
     "article-rentals":"Choose the billing mode that fits your use. Minute rentals are charged as time passes. Hourly and daily rentals prepay their period. Rates are fixed when you book. If your balance is too low, your rental may pause and then stop.",
     "legal-terms-en":"By using {{site_name}}, you agree to the rental terms, payment rules and acceptable-use requirements. Rentals reserve listed resources and do not promise investment income. Availability is subject to verification. Contact support about disputes. This draft requires jurisdiction-specific legal review before launch.",
+    "legal-privacy-en":"{{site_name}} processes account details, rental history, payment information and requested identity documents to provide and secure the service. Identity documents are restricted to authorized staff. Contact support to request access, correction or deletion where applicable. This draft requires legal review before launch.",
     "legal-risk-en":"Cryptocurrency involves significant risk. Prices may change sharply, network transfers can be irreversible, and funds may be lost by selecting the wrong address or network. Returns are not guaranteed. Renting assets is not a promise of profit. Do not commit funds you cannot afford to lose.",
   };
   for(const [slug,title,category,body] of articles)if(slug==="rentals")
@@ -264,7 +264,7 @@ export async function seedPlatform() {
     "deposit_submitted","deposit_approved","deposit_rejected","deposit_info","withdrawal_requested","withdrawal_confirmation","withdrawal_sent","withdrawal_rejected","withdrawal_manual",
     "rental_started","rental_extended","rental_completed","rental_stopped","rental_low_balance","rental_auto_renewed","rental_resumed","rental_ending_soon",
     "referral_signup","commission_earned","kyc_requested","kyc_submitted","kyc_approved","kyc_rejected","ticket_created","ticket_reply","ticket_resolved",
-    "admin_deposit_submitted","admin_withdrawal_requested","admin_withdrawal_manual","admin_ticket_created","admin_kyc_submitted","reconciliation_mismatch","large_withdrawal","admin_large_withdrawal","direct_message"];
+    "admin_deposit_submitted","admin_withdrawal_requested","admin_withdrawal_manual","admin_ticket_created","admin_kyc_submitted","reconciliation_mismatch","large_withdrawal","admin_large_withdrawal","direct_message","admin_security_alert"];
   for(const key of templates){
     const id=`email-${key}-en`,subject="{{title}} — {{site_name}}",body_html=defaultEmailTemplateBody(key);
     await db.insert(records).values({id,kind:"email_template",data:{key,language:"en",subject,body_html,template_version:2}}).onConflictDoNothing();
