@@ -1,10 +1,10 @@
 ---
-name: VPS deployment plan
-description: Operator's VPS database and test-before-domain deployment decision.
+name: VPS deployment setup
+description: The operator's self-hosted production VPS and deployment process.
 ---
 
-The operator chose a persistent PostgreSQL database and private-disk file storage on the EC2 VPS. The associated Elastic IP and outbound IP are 13.62.35.21. Temporary HTTPS testing is at https://13.62.35.21.sslip.io. mycryptovexa.com currently has no A record and www is unresolved.
+The operator chose a persistent PostgreSQL database and private-disk file storage on the EC2 VPS. The stable public IP is 13.62.35.21, and mycryptovexa.com now serves the production site over HTTPS through Nginx and the cryptovexa-api service. GitHub main is the VPS source.
 
-**Why:** the operator asked to install PostgreSQL on the VPS and keep it connected permanently, selected VPS disk storage for private uploads, and named the domain while keeping domain setup as the final step. A stable IP is now verified, but DNS still blocks the final domain certificate.
+**Why:** the operator asked to install PostgreSQL on the VPS and keep it connected permanently, selected VPS disk storage for private uploads, and later completed DNS and TLS for the production domain.
 
-**How to apply:** Keep PostgreSQL private to the VPS. Keep private files outside the web root with restrictive permissions and back up the file bytes separately from PostgreSQL. Have the operator set apex A to 13.62.35.21 and www CNAME to mycryptovexa.com, then issue TLS for both hosts and update SMTP public URL/logo. Treat the current instance and database as a test environment until production gates are met.
+**How to apply:** Keep PostgreSQL private to the VPS. Deploy by fast-forwarding GitHub main, building the web and API, copying frontend assets to the Nginx web root, restarting cryptovexa-api, testing Nginx configuration, and checking the public API health route and served bundle. Keep private files outside the web root with restrictive permissions and back them up separately from PostgreSQL. Production deployment does not replace the pending real-funds, legal, mail-delivery, and restore-validation gates.

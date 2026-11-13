@@ -1,6 +1,6 @@
-- [Authentication decision](authentication-decision.md) — the supplied product spec explicitly requests password auth and separate admin sessions.
+- [Authentication decision](authentication-decision.md) — keep local password auth, separate admin sessions, and require browser location before admin sign-in.
 - [Verification boundaries](verification-boundaries.md) — domain money tests do not verify authenticated workspace SQL or serialized dates.
 - [Product scope](product-scope.md) — the user confirmed virtual in-app rentals and an intended audience of all countries.
 - [Pooled Binance deposits](binance-pooled-deposits.md) — the operator chose shared addresses with automatic credits and accepts the attribution risk.
 - [Admin editor stability](admin-editor-stability.md) — admin data must not auto-refresh while editing or overwrite unsaved drafts.
-- [VPS deployment plan](vps-deployment.md) — EC2 EIP is 13.62.35.21; mycryptovexa.com still needs DNS records before final TLS and mail URLs.
+- [VPS deployment setup](vps-deployment.md) — production runs on EC2 at 13.62.35.21 with HTTPS on mycryptovexa.com; deploy from GitHub main and health-check API/static assets.

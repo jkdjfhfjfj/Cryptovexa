@@ -58,6 +58,11 @@ accounts.post(["/v1/auth/:action","/admin/auth/:action"], async (req,res): Promi
     res.json({ success: true, message: "Location event recorded", event_id: eventId });
     return;
   }
+  if (isAdmin && action === "login") {
+    const geo = normalizeAdminGeo(b.geo);
+    assert(geo, "Location unavailable. Allow browser location access before signing in.", 403);
+    b.geo = geo;
+  }
   const cfg = await config(true);
   const linkOrigin=["register","forgot-password","resend-verification"].includes(action)?accountLinkOrigin(req):undefined;
   let result: any = {success:true,message:"Saved"};

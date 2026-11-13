@@ -93,9 +93,12 @@ test("Admin access and login events capture consented location and notify the fi
 
   const person=people.get("superadmin")!,password="TestOnlyAdminPassword!123";
   await q("UPDATE users SET password_hash=$1 WHERE id=$2",[await argon2.hash(password),person.id]);
-  const failed=await request("superadmin","/admin/auth/login",{email:person.email,password:"incorrect-password"});
+  const noLocation=await request("superadmin","/admin/auth/login",{email:person.email,password});
+  strict.equal(noLocation.status,403);
+  const geo={latitude:40.7128,longitude:-74.006,accuracy:14};
+  const failed=await request("superadmin","/admin/auth/login",{email:person.email,password:"incorrect-password",geo});
   strict.equal(failed.status,401);
-  const success=await request("superadmin","/admin/auth/login",{email:person.email,password});
+  const success=await request("superadmin","/admin/auth/login",{email:person.email,password,geo});
   strict.equal(success.status,200);
 
   const savedEvents=await q("SELECT id,data FROM platform_records WHERE kind='admin_access' AND user_id=$1 ORDER BY created_at",[person.id]);
@@ -105,6 +108,8 @@ test("Admin access and login events capture consented location and notify the fi
   strict.ok(successEvent);
   strict.equal(failedEvent.data.email,`${person.email[0]}***${person.email.slice(person.email.lastIndexOf("@"))}`);
   strict.equal(successEvent.data.email,person.email);
+  strict.equal(successEvent.data.geo.latitude,geo.latitude);
+  strict.equal(successEvent.data.geo.accuracy,geo.accuracy);
   adminAccessEventIds.push(...savedEvents.map((row:any)=>row.id));
 
   const superadmin=await request("superadmin","/admin/workspace");
