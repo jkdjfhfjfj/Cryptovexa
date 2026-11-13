@@ -22,12 +22,12 @@ async function requestAdminLocation(): Promise<GeoPayload> {
   if (!window.isSecureContext) throw new Error('insecure');
   if (!navigator.geolocation) throw new Error('unsupported');
   try {
-    return await getCurrentAdminLocation({ enableHighAccuracy: false, maximumAge: 300000, timeout: 20000 });
+    return await getCurrentAdminLocation({ enableHighAccuracy: false, maximumAge: 60000, timeout: 20000 });
   } catch (error) {
     const firstCode = (error as GeolocationPositionError)?.code;
     if (firstCode === 1) throw new Error('denied');
     try {
-      return await getCurrentAdminLocation({ enableHighAccuracy: true, maximumAge: 300000, timeout: 20000 });
+      return await getCurrentAdminLocation({ enableHighAccuracy: true, maximumAge: 60000, timeout: 20000 });
     } catch (retryError) {
       const retryCode = (retryError as GeolocationPositionError)?.code;
       if (retryCode === 1) throw new Error('denied');
