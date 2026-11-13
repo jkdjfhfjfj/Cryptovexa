@@ -8,18 +8,33 @@ import { AuthLayout, Field } from '../auth';
 
 type GeoPayload = { latitude: number; longitude: number; accuracy: number };
 
-function requestAdminLocation(): Promise<GeoPayload> {
+function getCurrentAdminLocation(options: PositionOptions): Promise<GeoPayload> {
   return new Promise((resolve, reject) => {
-    if (!navigator.geolocation || !window.isSecureContext) {
-      reject(new Error('Location unavailable'));
-      return;
-    }
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => resolve({ latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy }),
-      () => reject(new Error('Location unavailable')),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 12000 },
+      reject,
+      options,
     );
   });
+}
+
+async function requestAdminLocation(): Promise<GeoPayload> {
+  if (!window.isSecureContext) throw new Error('insecure');
+  if (!navigator.geolocation) throw new Error('unsupported');
+  try {
+    return await getCurrentAdminLocation({ enableHighAccuracy: false, maximumAge: 300000, timeout: 20000 });
+  } catch (error) {
+    const firstCode = (error as GeolocationPositionError)?.code;
+    if (firstCode === 1) throw new Error('denied');
+    try {
+      return await getCurrentAdminLocation({ enableHighAccuracy: true, maximumAge: 300000, timeout: 20000 });
+    } catch (retryError) {
+      const retryCode = (retryError as GeolocationPositionError)?.code;
+      if (retryCode === 1) throw new Error('denied');
+      if (firstCode === 3 || retryCode === 3) throw new Error('timeout');
+      throw new Error('unavailable');
+    }
+  }
 }
 
 export default function AdminLoginPage() {
@@ -65,8 +80,18 @@ export default function AdminLoginPage() {
         let location: GeoPayload;
         try {
           location = await requestAdminLocation();
-        } catch {
-          setGeoMessage('Location unavailable. Allow location access in your browser and try again. Sign-in was not submitted.');
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : 'unavailable';
+          const message = reason === 'insecure'
+            ? 'Location requires a secure HTTPS connection. Open the secure admin link and try again.'
+            : reason === 'unsupported'
+              ? 'This browser does not provide location. Use a supported browser to sign in.'
+              : reason === 'denied'
+                ? 'Browser location permission is blocked. Allow location for this site in browser settings, then try again.'
+                : reason === 'timeout'
+                  ? 'Location request timed out. Check device location services or Wi-Fi and try again.'
+                  : 'Your browser allowed location, but the device could not determine a position. Check device location services or Wi-Fi and retry.';
+          setGeoMessage(`${message} Sign-in was not submitted.`);
           setGeoBusy(false);
           return;
         }
